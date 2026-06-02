@@ -1,0 +1,12 @@
+# Plugin data managed by lazy.nvim — not tracked
+lazy-lock.json
+
+# Compiled Lua cache
+lua/__pycache__/
+*.luac
+
+# Mason-installed binaries (reinstalled automatically)
+/mason/
+
+# Local/machine-specific overrides
+local.lua
