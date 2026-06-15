@@ -35,6 +35,9 @@ return {
           "emmet_language_server",
         },
         automatic_installation = true,
+        -- jdtls is started manually in ftplugin/java.lua with Lombok javaagent.
+        -- Exclude it here so mason-lspconfig doesn't launch a second bare instance.
+        automatic_enable = { exclude = { "jdtls" } },
       })
     end,
   },
@@ -75,22 +78,39 @@ return {
       )
 
       -- ── Shared on_attach keymaps ────────────────────────────────────────
-      local function on_attach(_, bufnr)
+      local function on_attach(client, bufnr)
         local map = function(keys, func, desc)
           vim.keymap.set("n", keys, func, { buffer = bufnr, desc = desc })
         end
+        local caps = client.server_capabilities
+
         map("gd",         "<cmd>Telescope lsp_definitions<CR>",    "Go to definition")
-        map("gD",         vim.lsp.buf.declaration,                 "Go to declaration")
-        map("gr",         "<cmd>Telescope lsp_references<CR>",     "Find references")
-        map("gi",         "<cmd>Telescope lsp_implementations<CR>","Find implementations")
         map("K",          vim.lsp.buf.hover,                       "Hover docs")
-        map("<C-k>",      vim.lsp.buf.signature_help,              "Signature help")
-        map("<leader>rn", vim.lsp.buf.rename,                      "Rename symbol")
-        map("<leader>ca", vim.lsp.buf.code_action,                 "Code action")
-        map("<leader>lt", "<cmd>Telescope lsp_type_definitions<CR>","Type definition")
         map("[d",         vim.diagnostic.goto_prev,                "Prev diagnostic")
         map("]d",         vim.diagnostic.goto_next,                "Next diagnostic")
         map("<leader>d",  vim.diagnostic.open_float,               "Show diagnostic")
+
+        if caps.declarationProvider then
+          map("gD", vim.lsp.buf.declaration, "Go to declaration")
+        end
+        if caps.referencesProvider then
+          map("gr", "<cmd>Telescope lsp_references<CR>", "Find references")
+        end
+        if caps.implementationProvider then
+          map("gi", "<cmd>Telescope lsp_implementations<CR>", "Find implementations")
+        end
+        if caps.typeDefinitionProvider then
+          map("<leader>lt", "<cmd>Telescope lsp_type_definitions<CR>", "Type definition")
+        end
+        if caps.signatureHelpProvider then
+          map("<C-k>", vim.lsp.buf.signature_help, "Signature help")
+        end
+        if caps.renameProvider then
+          map("<leader>rn", vim.lsp.buf.rename, "Rename symbol")
+        end
+        if caps.codeActionProvider then
+          map("<leader>ca", vim.lsp.buf.code_action, "Code action")
+        end
       end
 
       -- ── Apply capabilities + on_attach to EVERY server via wildcard ─────
@@ -152,7 +172,34 @@ return {
         settings = {
           yaml = {
             schemaStore = { enable = false, url = "" },
-            schemas = ss_ok and schemastore.yaml.schemas() or {},
+            schemas = vim.tbl_extend("force",
+              ss_ok and schemastore.yaml.schemas() or {},
+              {
+                -- Spring Boot application.yml / application-{profile}.yml
+                ["https://www.schemastore.org/api/json/catalog.json"] = false,
+                ["http://json.schemastore.org/spring-boot-application"] = {
+                  "application.yml",
+                  "application.yaml",
+                  "application-*.yml",
+                  "application-*.yaml",
+                  "bootstrap.yml",
+                  "bootstrap-*.yml",
+                },
+              }
+            ),
+            validate = true,
+            completion = true,
+            hover = true,
+          },
+        },
+      })
+
+      -- Disable inline CSS validation in HTML files — the CSS language service
+      -- inside html-lsp crashes on null config when validating inline styles
+      vim.lsp.config("html", {
+        settings = {
+          html = {
+            validate = { scripts = true, styles = false },
           },
         },
       })
@@ -167,6 +214,9 @@ return {
       })
 
       vim.lsp.enable({ "ts_ls", "lua_ls", "jsonls", "yamlls", "html", "cssls", "eslint", "emmet_language_server" })
+
+      -- ── LSP logging (warn + above written to ~/.local/state/nvim/lsp.log) ─
+      vim.lsp.set_log_level("warn")
 
       -- ── Diagnostic display ──────────────────────────────────────────────
       vim.diagnostic.config({
@@ -196,21 +246,13 @@ return {
       "L3MON4D3/LuaSnip",
       "saadparwaiz1/cmp_luasnip",
       "rafamadriz/friendly-snippets",
+      "onsails/lspkind.nvim",
     },
     config = function()
       local cmp = require("cmp")
       local luasnip = require("luasnip")
+      local lspkind = require("lspkind")
       require("luasnip.loaders.from_vscode").lazy_load()
-
-      local kind_icons = {
-        Text = "", Method = "󰆧", Function = "󰊕", Constructor = "",
-        Field = "󰇽", Variable = "󰂡", Class = "󰠱", Interface = "",
-        Module = "", Property = "󰜢", Unit = "", Value = "󰎠",
-        Enum = "", Keyword = "󰌋", Snippet = "", Color = "󰏘",
-        File = "󰈙", Reference = "", Folder = "󰉋", EnumMember = "",
-        Constant = "󰏿", Struct = "", Event = "", Operator = "󰆕",
-        TypeParameter = "󰅲",
-      }
 
       cmp.setup({
         snippet = {
@@ -246,10 +288,12 @@ return {
           { name = "path",     priority = 250 },
         }),
         formatting = {
-          format = function(_, vim_item)
-            vim_item.kind = string.format("%s %s", kind_icons[vim_item.kind] or "", vim_item.kind)
-            return vim_item
-          end,
+          format = lspkind.cmp_format({
+            mode = "symbol_text",
+            maxwidth = 50,
+            ellipsis_char = "…",
+            show_labelDetails = true,
+          }),
         },
       })
 

@@ -155,7 +155,7 @@ return {
     end,
   },
 
-  -- Notifications
+  -- Notifications + history
   {
     "rcarriga/nvim-notify",
     config = function()
@@ -165,6 +165,10 @@ return {
         stages = "fade_in_slide_out",
       })
       vim.notify = require("notify")
+
+      -- Load telescope extension so we can browse notification history
+      local ok, telescope = pcall(require, "telescope")
+      if ok then telescope.load_extension("notify") end
     end,
   },
 }

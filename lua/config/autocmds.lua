@@ -57,6 +57,50 @@ autocmd({ "FocusLost", "BufLeave", "InsertLeave" }, {
   end,
 })
 
+-- Java: reindex project when a new .java file is first saved
+local new_java_bufs = {}
+autocmd("BufNewFile", {
+  group = augroup("java_new_file_track", { clear = true }),
+  pattern = "*.java",
+  callback = function(ev)
+    new_java_bufs[ev.buf] = true
+  end,
+})
+autocmd("BufWritePost", {
+  group = augroup("java_new_file_reindex", { clear = true }),
+  pattern = "*.java",
+  callback = function(ev)
+    if not new_java_bufs[ev.buf] then return end
+    new_java_bufs[ev.buf] = nil
+    local bufname = vim.api.nvim_buf_get_name(ev.buf)
+    vim.defer_fn(function()
+      local clients = vim.lsp.get_clients({ name = "jdtls" })
+      if #clients == 0 then return end
+      vim.lsp.buf.execute_command({
+        command = "java.projectConfiguration.update",
+        arguments = { vim.uri_from_fname(bufname) },
+      })
+      vim.notify("Java: reindexing project for new file…", vim.log.levels.INFO)
+    end, 1000)
+  end,
+})
+
+-- Gradle: refresh jdtls project config when build files are saved
+autocmd("BufWritePost", {
+  group = augroup("gradle_refresh", { clear = true }),
+  pattern = { "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "gradle.properties" },
+  callback = function()
+    local clients = vim.lsp.get_clients({ name = "jdtls" })
+    if #clients == 0 then return end
+    local uri = vim.uri_from_fname(vim.api.nvim_buf_get_name(0))
+    vim.lsp.buf.execute_command({
+      command = "java.projectConfiguration.update",
+      arguments = { uri },
+    })
+    vim.notify("Gradle: refreshing project dependencies…", vim.log.levels.INFO)
+  end,
+})
+
 -- Auto-create parent directories when saving a new file
 autocmd("BufWritePre", {
   group = augroup("auto_create_dir", { clear = true }),

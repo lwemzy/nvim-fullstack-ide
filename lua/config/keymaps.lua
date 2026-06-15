@@ -30,7 +30,7 @@ map("n", "<C-S-e>", ":NvimTreeFindFile<CR>", { silent = true, desc = "Reveal fil
 -- C-t = recent files                      overrides: tag-jump       (rarely used)
 map("n", "<C-p>", "<cmd>Telescope find_files<CR>",  { desc = "Find files" })
 map("n", "<C-s-f>", function() require("telescope.builtin").live_grep() end, { desc = "Live grep (search in files)" })
-map("n", "<C-b>", "<cmd>Telescope buffers<CR>",     { desc = "Switch buffer" })
+map("n", "<C-b>", "<cmd>Telescope buffers<CR>", { desc = "Switch buffer" })
 map("n", "<C-t>", "<cmd>Telescope oldfiles<CR>",    { desc = "Recent files" })
 
 -- ── Save / Quit ────────────────────────────────────────────────────────────
@@ -47,7 +47,14 @@ end, { desc = "Format file" })
 
 -- ── LSP actions ───────────────────────────────────────────────────────────
 map("n", "<F2>",  vim.lsp.buf.rename,                   { desc = "Rename symbol" })
-map("n", "<F4>",  vim.lsp.buf.code_action,              { desc = "Code action" })
+map("n", "<F4>", function()
+  local clients = vim.lsp.get_clients({ bufnr = 0 })
+  if #clients == 0 then
+    vim.notify("No LSP attached to this buffer", vim.log.levels.WARN)
+    return
+  end
+  vim.lsp.buf.code_action()
+end, { desc = "Code action" })
 map("n", "<F12>", "<cmd>Telescope lsp_definitions<CR>", { desc = "Go to definition" })
 
 -- ── Diagnostics ────────────────────────────────────────────────────────────
@@ -143,3 +150,13 @@ map("v", "<C-/>", comment_visual,  { desc = "Toggle comment" })
 
 -- Clear search highlight
 map("n", "<Esc>", ":nohlsearch<CR>", { silent = true })
+
+-- ── Logs / Diagnostics ────────────────────────────────────────────────────
+-- LSP log: warnings/errors from language servers
+map("n", "<F1>", "<cmd>LspLog<CR>", { desc = "Open LSP log" })
+-- Notification history: browse past notifications in Telescope
+map("n", "<C-S-n>", "<cmd>Telescope notify<CR>", { desc = "Notification history" })
+-- Neovim runtime log
+map("n", "<C-S-l>", function()
+  vim.cmd("edit " .. vim.fn.stdpath("log") .. "/nvim.log")
+end, { desc = "Open Neovim log" })

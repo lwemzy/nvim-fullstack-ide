@@ -21,6 +21,9 @@ local lombok_arg = vim.fn.filereadable(lombok_jar) == 1
   and "--jvm-arg=-javaagent:" .. lombok_jar
   or nil
 
+-- Workspace dir must exist before jdtls starts; otherwise LaunchingPlugin can't save install info
+vim.fn.mkdir(workspace_dir, "p")
+
 local config = {
   cmd = (function()
     local c = {
@@ -57,6 +60,8 @@ local config = {
       referencesCodeLens = { enabled = true },
       references = { includeDecompiledSources = true },
       inlayHints = { parameterNames = { enabled = "all" } },
+      -- Enable annotation processing so MapStruct/Lombok processors run in jdtls's JDT compiler
+      autobuild = { enabled = true },
       format = {
         enabled = true,
         settings = {
@@ -89,7 +94,6 @@ local config = {
   },
 
   on_attach = function(_, bufnr)
-    jdtls.setup_dap({ hotcodereplace = "auto" })
     jdtls.setup.add_commands()
 
     local map = function(keys, func, desc)
@@ -147,7 +151,31 @@ local config = {
 }
 
 -- Use workspace_dir so each project gets its own jdtls instance
-config.cmd[#config.cmd + 1] = "--data"
+-- Note: jdtls launcher uses single-dash -data (not --data)
+config.cmd[#config.cmd + 1] = "-data"
 config.cmd[#config.cmd + 1] = workspace_dir
 
+-- Configure nvim-dap's Java adapter BEFORE start_or_attach so the
+-- _java.reloadBundles.command handler is registered before jdtls initialises.
+pcall(jdtls.setup_dap, { hotcodereplace = "auto" })
+
 jdtls.start_or_attach(config)
+
+-- Clean workspace and restart jdtls (use when Lombok/deps go stale)
+vim.api.nvim_create_user_command("JdtlsClean", function()
+  local clients = vim.lsp.get_clients({ name = "jdtls" })
+  if #clients > 0 then
+    vim.notify("jdtls: stopping server…", vim.log.levels.INFO)
+    vim.lsp.stop_client(clients, true)  -- true = force
+  end
+  -- Wait for jdtls to fully exit before wiping the workspace
+  vim.defer_fn(function()
+    vim.fn.delete(workspace_dir, "rf")
+    vim.notify("jdtls: workspace cleared — restarting…", vim.log.levels.INFO)
+    vim.defer_fn(function()
+      vim.cmd("edit")
+    end, 500)
+  end, 3000)  -- 3s gives jdtls time to flush and exit cleanly
+end, { desc = "Clear jdtls workspace and restart" })
+
+vim.keymap.set("n", "<leader>jc", "<cmd>JdtlsClean<CR>", { buffer = true, desc = "Java: Clean & restart jdtls" })

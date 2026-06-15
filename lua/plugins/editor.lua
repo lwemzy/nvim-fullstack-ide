@@ -80,7 +80,7 @@ return {
         -- Higher timeout to handle prettierd cold-start; async so it never blocks editing
         format_on_save = function(bufnr)
           return {
-            timeout_ms   = 3000,
+            timeout_ms   = 5000,
             lsp_fallback = true,
             async        = true,
           }
@@ -118,7 +118,7 @@ return {
   {
     "karb94/neoscroll.nvim",
     config = function()
-      require("neoscroll").setup({ mappings = { "<C-u>", "<C-d>", "<C-b>", "<C-f>" } })
+      require("neoscroll").setup({ mappings = { "<C-u>", "<C-d>" } })
     end,
   },
 }
