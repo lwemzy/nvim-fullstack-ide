@@ -101,11 +101,22 @@ autocmd("BufWritePost", {
   end,
 })
 
+-- Auto-reload files changed outside Neovim
+-- autoread alone doesn't poll; checktime fires the actual reload check
+autocmd({ "FocusGained", "BufEnter", "CursorHold", "CursorHoldI" }, {
+  group = augroup("auto_reload", { clear = true }),
+  callback = function()
+    if vim.fn.mode() ~= "c" then
+      vim.cmd("checktime")
+    end
+  end,
+})
+
 -- Auto-create parent directories when saving a new file
 autocmd("BufWritePre", {
   group = augroup("auto_create_dir", { clear = true }),
   callback = function(ev)
-    local file = vim.loop.fs_realpath(ev.match) or ev.match
+    local file = vim.uv.fs_realpath(ev.match) or ev.match
     vim.fn.mkdir(vim.fn.fnamemodify(file, ":p:h"), "p")
   end,
 })

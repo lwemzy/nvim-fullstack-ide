@@ -77,12 +77,11 @@ return {
           yaml            = { "prettierd", "prettier", stop_after_first = true },
           markdown        = { "prettierd", "prettier", stop_after_first = true },
         },
-        -- Higher timeout to handle prettierd cold-start; async so it never blocks editing
-        format_on_save = function(bufnr)
+        -- format_after_save runs async so it never blocks editing
+        format_after_save = function(bufnr)
           return {
             timeout_ms   = 5000,
             lsp_fallback = true,
-            async        = true,
           }
         end,
         formatters = {

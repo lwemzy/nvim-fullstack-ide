@@ -33,3 +33,4 @@ opt.ignorecase = true
 opt.smartcase = true
 opt.list = true
 opt.listchars = { tab = "» ", trail = "·", nbsp = "␣" }
+opt.autoread = true

@@ -143,7 +143,9 @@ return {
           on_attach(client, bufnr)
           vim.api.nvim_create_autocmd("BufWritePre", {
             buffer = bufnr,
-            command = "EslintFixAll",
+            callback = function()
+              pcall(vim.cmd, "EslintFixAll")
+            end,
           })
         end,
       })
@@ -216,7 +218,7 @@ return {
       vim.lsp.enable({ "ts_ls", "lua_ls", "jsonls", "yamlls", "html", "cssls", "eslint", "emmet_language_server" })
 
       -- ── LSP logging (warn + above written to ~/.local/state/nvim/lsp.log) ─
-      vim.lsp.set_log_level("warn")
+      vim.lsp.log.set_level(vim.log.levels.WARN)
 
       -- ── Diagnostic display ──────────────────────────────────────────────
       vim.diagnostic.config({
@@ -228,10 +230,16 @@ return {
         float = { border = "rounded", source = "always" },
       })
 
-      vim.lsp.handlers["textDocument/hover"] =
-        vim.lsp.with(vim.lsp.handlers.hover, { border = "rounded" })
-      vim.lsp.handlers["textDocument/signatureHelp"] =
-        vim.lsp.with(vim.lsp.handlers.signature_help, { border = "rounded" })
+      vim.lsp.config("*", {
+        handlers = {
+          ["textDocument/hover"] = function(err, result, ctx, config)
+            vim.lsp.handlers.hover(err, result, ctx, vim.tbl_extend("force", config or {}, { border = "rounded" }))
+          end,
+          ["textDocument/signatureHelp"] = function(err, result, ctx, config)
+            vim.lsp.handlers.signature_help(err, result, ctx, vim.tbl_extend("force", config or {}, { border = "rounded" }))
+          end,
+        },
+      })
     end,
   },
 
@@ -290,6 +298,7 @@ return {
         formatting = {
           format = lspkind.cmp_format({
             mode = "symbol_text",
+            preset = "codicons",
             maxwidth = 50,
             ellipsis_char = "…",
             show_labelDetails = true,
