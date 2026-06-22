@@ -10,26 +10,9 @@ local M = {}
 local CTX_FILE = "/tmp/nvim-claude-ctx"
 
 local state = {
-  buf   = nil,  -- the persistent terminal buffer
-  win   = nil,  -- the panel window (nil when hidden)
-  timer = nil,  -- reload timer (polls checktime while panel is open)
+  buf = nil,  -- the persistent terminal buffer
+  win = nil,  -- the panel window (nil when hidden)
 }
-
-local function start_reload_timer()
-  if state.timer then return end
-  state.timer = vim.uv.new_timer()
-  state.timer:start(2000, 2000, vim.schedule_wrap(function()
-    vim.cmd("silent! checktime")
-  end))
-end
-
-local function stop_reload_timer()
-  if state.timer then
-    state.timer:stop()
-    state.timer:close()
-    state.timer = nil
-  end
-end
 
 -- ── Context file writer ──────────────────────────────────────────────────────
 
@@ -92,7 +75,6 @@ local function create_terminal_buf()
       on_exit = function()
         state.buf = nil
         state.win = nil
-        stop_reload_timer()
       end,
     })
   end)
@@ -110,7 +92,6 @@ close_panel = function()
     vim.api.nvim_win_close(state.win, false)
   end
   state.win = nil
-  stop_reload_timer()
 end
 
 local function open_panel()
@@ -132,7 +113,6 @@ local function open_panel()
   wo.wrap           = true
 
   vim.cmd("startinsert")
-  start_reload_timer()
 end
 
 function M.toggle_chat()

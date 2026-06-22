@@ -102,12 +102,13 @@ autocmd("BufWritePost", {
 })
 
 -- Auto-reload files changed outside Neovim
--- autoread alone doesn't poll; checktime fires the actual reload check
-autocmd({ "FocusGained", "BufEnter", "CursorHold", "CursorHoldI" }, {
+-- TermLeave fires when exiting a terminal (e.g. Claude panel) — ideal for
+-- picking up file changes Claude made while you were in the terminal.
+autocmd({ "FocusGained", "BufEnter", "CursorHold", "CursorHoldI", "TermLeave" }, {
   group = augroup("auto_reload", { clear = true }),
   callback = function()
     if vim.fn.mode() ~= "c" then
-      vim.cmd("checktime")
+      vim.cmd("silent! checktime")
     end
   end,
 })
