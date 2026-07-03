@@ -16,6 +16,32 @@ return {
     end,
   },
 
+  -- Rainbow delimiters — nested bracket/brace/paren colors via Treesitter
+  {
+    "HiPhish/rainbow-delimiters.nvim",
+    lazy = false,
+    config = function()
+      vim.g.rainbow_delimiters = {
+        strategy = {
+          [""] = "rainbow-delimiters.strategy.global",
+        },
+        query = {
+          [""] = "rainbow-delimiters",
+          lua  = "rainbow-blocks",
+        },
+        highlight = {
+          "RainbowDelimiterRed",
+          "RainbowDelimiterYellow",
+          "RainbowDelimiterBlue",
+          "RainbowDelimiterOrange",
+          "RainbowDelimiterGreen",
+          "RainbowDelimiterViolet",
+          "RainbowDelimiterCyan",
+        },
+      }
+    end,
+  },
+
   -- Auto-close and auto-rename HTML / JSX / TSX tags
   {
     "windwp/nvim-ts-autotag",

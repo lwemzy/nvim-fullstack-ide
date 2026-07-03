@@ -120,6 +120,11 @@ local config = {
     map("<C-S-v>", jdtls.extract_variable,      "Extract variable")
     map("<C-S-c>", jdtls.extract_constant,      "Extract constant")
 
+    -- Debug keymaps (F9/F10/F11 are taken by Java tools above)
+    map("<leader>db", function() require("dap").toggle_breakpoint() end, "Debug: Toggle breakpoint")
+    map("<leader>dt", function() require("dap").terminate() end,         "Debug: Terminate")
+    map("<leader>du", function() require("dapui").toggle() end,          "Debug: Toggle UI")
+
     vim.keymap.set("v", "<leader>jv", function()
       jdtls.extract_variable(true)
     end, { buffer = bufnr, desc = "Extract variable (visual)" })
@@ -155,10 +160,14 @@ local config = {
 config.cmd[#config.cmd + 1] = "-data"
 config.cmd[#config.cmd + 1] = workspace_dir
 
--- Configure nvim-dap's Java adapter BEFORE start_or_attach so the
--- _java.reloadBundles.command handler is registered before jdtls initialises.
-pcall(jdtls.setup_dap, { hotcodereplace = "auto" })
+-- Register _java.reloadBundles.command handler.
+-- jdtls server sends this via workspace/executeClientCommand and expects a
+-- response — returning the bundle list acknowledges the command without error.
+vim.lsp.commands["_java.reloadBundles.command"] = function()
+  return config.init_options and config.init_options.bundles or {}
+end
 
+pcall(jdtls.setup_dap, { hotcodereplace = "auto" })
 jdtls.start_or_attach(config)
 
 -- Clean workspace and restart jdtls (use when Lombok/deps go stale)

@@ -2,6 +2,7 @@ return {
   -- Core DAP
   {
     "mfussenegger/nvim-dap",
+    event = "VeryLazy",
     dependencies = {
       -- UI
       { "rcarriga/nvim-dap-ui", dependencies = { "nvim-neotest/nvim-nio" } },
