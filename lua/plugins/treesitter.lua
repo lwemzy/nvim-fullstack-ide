@@ -9,7 +9,7 @@ return {
           "lua", "vim", "vimdoc", "query",
           "json", "jsonc", "yaml", "toml",
           "html", "css", "scss", "markdown", "markdown_inline",
-          "bash", "xml", "regex",
+          "bash", "xml", "regex", "angular",
         },
         auto_install = true,
       })

@@ -57,7 +57,7 @@ return {
       -- ── TypeScript / JavaScript ───────────────────────────────────────
       local js_adapter = vim.fn.stdpath("data") .. "/mason/packages/js-debug-adapter"
       if vim.fn.isdirectory(js_adapter) == 1 then
-        require("dap").adapters["pwa-node"] = {
+        local js_debug_server = {
           type = "server",
           host = "localhost",
           port = "${port}",
@@ -66,6 +66,8 @@ return {
             args = { js_adapter .. "/js-debug/src/dapDebugServer.js", "${port}" },
           },
         }
+        require("dap").adapters["pwa-node"] = js_debug_server
+        require("dap").adapters["pwa-chrome"] = js_debug_server
 
         for _, lang in ipairs({ "typescript", "javascript", "typescriptreact", "javascriptreact" }) do
           dap.configurations[lang] = {
@@ -84,6 +86,14 @@ return {
               name      = "Attach to process",
               processId = require("dap.utils").pick_process,
               cwd       = "${workspaceFolder}",
+            },
+            {
+              type    = "pwa-chrome",
+              request = "launch",
+              name    = "Launch Chrome against ng serve (localhost:4200)",
+              url     = "http://localhost:4200",
+              webRoot = "${workspaceFolder}",
+              sourceMaps = true,
             },
           }
         end
