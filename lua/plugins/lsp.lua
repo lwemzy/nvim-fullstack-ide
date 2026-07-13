@@ -32,7 +32,7 @@ return {
         ensure_installed = {
           "ts_ls", "jdtls", "lua_ls",
           "jsonls", "yamlls", "html", "cssls", "eslint",
-          "emmet_language_server",
+          "emmet_language_server", "angularls",
         },
         automatic_installation = true,
         -- jdtls is started manually in ftplugin/java.lua with Lombok javaagent.
@@ -48,7 +48,7 @@ return {
     dependencies = { "williamboman/mason.nvim" },
     config = function()
       require("mason-tool-installer").setup({
-        ensure_installed = { "prettierd" },
+        ensure_installed = { "prettierd", "vscode-spring-boot-tools" },
         run_on_start = true,
       })
     end,
@@ -117,7 +117,21 @@ return {
       vim.lsp.config("*", { capabilities = capabilities, on_attach = on_attach })
 
       -- ── Per-server overrides ────────────────────────────────────────────
+      -- In Angular projects, angularls supersedes ts_ls for .ts files (it
+      -- provides equivalent TS intelligence plus template/DI awareness).
+      -- Running both attached to the same buffer causes duplicate diagnostics
+      -- and breaks single-client consumers like nvim-navic ("Failed to attach
+      -- to angularls for current buffer. Already attached to ts_ls"). Skip
+      -- ts_ls entirely when angular.json is present so angularls is the sole
+      -- TS server there.
+      local ts_ls_default_root_dir = vim.lsp.config.ts_ls.root_dir
       vim.lsp.config("ts_ls", {
+        root_dir = function(bufnr, on_dir)
+          if vim.fs.root(bufnr, { "angular.json" }) then
+            return
+          end
+          ts_ls_default_root_dir(bufnr, on_dir)
+        end,
         settings = {
           typescript = {
             inlayHints = {
@@ -215,7 +229,7 @@ return {
         },
       })
 
-      vim.lsp.enable({ "ts_ls", "lua_ls", "jsonls", "yamlls", "html", "cssls", "eslint", "emmet_language_server" })
+      vim.lsp.enable({ "ts_ls", "lua_ls", "jsonls", "yamlls", "html", "cssls", "eslint", "emmet_language_server", "angularls" })
 
       -- ── LSP logging (warn + above written to ~/.local/state/nvim/lsp.log) ─
       vim.lsp.log.set_level(vim.log.levels.WARN)

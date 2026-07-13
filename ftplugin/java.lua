@@ -93,7 +93,7 @@ local config = {
     },
   },
 
-  on_attach = function(_, bufnr)
+  on_attach = function(client, bufnr)
     jdtls.setup.add_commands()
 
     local map = function(keys, func, desc)
@@ -105,6 +105,8 @@ local config = {
     map("gD", vim.lsp.buf.declaration, "Go to declaration")
     map("gr", "<cmd>Telescope lsp_references<CR>", "Find references")
     map("gi", "<cmd>Telescope lsp_implementations<CR>", "Find implementations")
+    map("<leader>ds", "<cmd>Telescope lsp_document_symbols<CR>", "Document symbols")
+    map("<leader>ws", "<cmd>Telescope lsp_dynamic_workspace_symbols<CR>", "Workspace symbols")
     map("K", vim.lsp.buf.hover, "Hover docs")
     map("<C-k>", vim.lsp.buf.signature_help, "Signature help")
     map("<leader>rn", vim.lsp.buf.rename, "Rename symbol")
@@ -122,8 +124,131 @@ local config = {
 
     -- Debug keymaps (F9/F10/F11 are taken by Java tools above)
     map("<leader>db", function() require("dap").toggle_breakpoint() end, "Debug: Toggle breakpoint")
+    map("<leader>dB", function()
+      require("dap").set_breakpoint(vim.fn.input("Breakpoint condition: "))
+    end, "Debug: Conditional breakpoint")
     map("<leader>dt", function() require("dap").terminate() end,         "Debug: Terminate")
     map("<leader>du", function() require("dapui").toggle() end,          "Debug: Toggle UI")
+    map("<leader>dr", function() require("dap").repl.toggle() end,       "Debug: Toggle REPL")
+
+    -- Run without attaching the debugger (plain `java -cp ...` launch via jdtls)
+    map("<leader>dR", function()
+      require("jdtls.dap").fetch_main_configs({ config_overrides = { noDebug = true } }, function(configs)
+        vim.schedule(function()
+          if #configs == 0 then
+            vim.notify("No runnable main classes found", vim.log.levels.WARN)
+          elseif #configs == 1 then
+            require("dap").run(configs[1])
+          else
+            vim.ui.select(configs, {
+              prompt = "Run (no debug):",
+              format_item = function(c) return c.name end,
+            }, function(choice)
+              if choice then require("dap").run(choice) end
+            end)
+          end
+        end)
+      end)
+    end, "Run without debugging")
+
+    -- Format on save
+    vim.api.nvim_create_autocmd("BufWritePre", {
+      buffer = bufnr,
+      callback = function()
+        vim.lsp.buf.format({ async = false, id = client.id })
+      end,
+    })
+
+    -- Code lenses (implementations/references counts, java-test's Run/Debug Test
+    -- lenses). Bypasses vim.lsp.codelens's built-in renderer, which draws every
+    -- lens on its own virt_line above the code — instead: render only the
+    -- lens(es) for the line the cursor is currently on, inline at end-of-line.
+    if client.server_capabilities.codeLensProvider then
+      local codelens_ns = vim.api.nvim_create_namespace("java_codelens_" .. bufnr)
+      local codelens_by_row = {}
+
+      local function render_cursor_lens()
+        vim.api.nvim_buf_clear_namespace(bufnr, codelens_ns, 0, -1)
+        local row = vim.api.nvim_win_get_cursor(0)[1] - 1
+        local lenses = codelens_by_row[row]
+        if not lenses then return end
+        local titles = {}
+        for _, lens in ipairs(lenses) do
+          if lens.command and lens.command.title and lens.command.title ~= "" then
+            table.insert(titles, lens.command.title)
+          end
+        end
+        if #titles > 0 then
+          vim.api.nvim_buf_set_extmark(bufnr, codelens_ns, row, 0, {
+            virt_text = { { "  " .. table.concat(titles, " | "), "Comment" } },
+            virt_text_pos = "eol",
+            hl_mode = "combine",
+          })
+        end
+      end
+
+      local function fetch_codelens()
+        local params = { textDocument = vim.lsp.util.make_text_document_params(bufnr) }
+        client:request("textDocument/codeLens", params, function(err, result)
+          if err or not result then return end
+          codelens_by_row = {}
+          local function place(lens)
+            local row = lens.range.start.line
+            codelens_by_row[row] = codelens_by_row[row] or {}
+            table.insert(codelens_by_row[row], lens)
+          end
+
+          -- jdtls returns lenses unresolved (no command.title yet) — each one
+          -- needs a codeLens/resolve round trip before it has anything to show.
+          local pending = 0
+          for _, lens in ipairs(result) do
+            if lens.command then
+              place(lens)
+            else
+              pending = pending + 1
+              client:request("codeLens/resolve", lens, function(rerr, resolved)
+                if not rerr and resolved then place(resolved) end
+                pending = pending - 1
+                if pending == 0 then render_cursor_lens() end
+              end, bufnr)
+            end
+          end
+          if pending == 0 then render_cursor_lens() end
+        end, bufnr)
+      end
+
+      vim.api.nvim_create_autocmd({ "BufEnter", "CursorHold", "InsertLeave", "BufWritePost" }, {
+        buffer = bufnr,
+        callback = fetch_codelens,
+      })
+      vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
+        buffer = bufnr,
+        callback = render_cursor_lens,
+      })
+      fetch_codelens()
+
+      map("<leader>cl", function()
+        local row = vim.api.nvim_win_get_cursor(0)[1] - 1
+        local lenses = codelens_by_row[row] or {}
+        if #lenses == 0 then
+          vim.notify("No code lens on this line", vim.log.levels.INFO)
+        elseif #lenses == 1 then
+          client:exec_cmd(lenses[1].command, { bufnr = bufnr })
+        else
+          vim.ui.select(lenses, {
+            prompt = "Code lens:",
+            format_item = function(l) return l.command and l.command.title or "?" end,
+          }, function(choice)
+            if choice then client:exec_cmd(choice.command, { bufnr = bufnr }) end
+          end)
+        end
+      end, "Run code lens")
+    end
+
+    -- Inlay hints (parameter names) can get noisy in heavily-chained code
+    map("<leader>uh", function()
+      vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }), { bufnr = bufnr })
+    end, "Toggle inlay hints")
 
     vim.keymap.set("v", "<leader>jv", function()
       jdtls.extract_variable(true)
@@ -134,6 +259,7 @@ local config = {
   end,
 
   init_options = {
+    extendedClientCapabilities = jdtls.extendedClientCapabilities,
     bundles = (function()
       local bundles = {}
       -- java-debug-adapter (enables DAP debugging)
@@ -145,11 +271,26 @@ local config = {
         vim.list_extend(bundles, { debug_jar })
       end
       -- java-test (enables running tests via jdtls)
+      -- Excludes runner-jar-with-dependencies.jar and jacocoagent.jar: these are
+      -- plain runtime jars for the test JVM's classpath, not OSGi bundles, and
+      -- including them makes jdtls's loadBundles throw and abort the whole list
+      -- (which silently breaks vscode.java.resolveMainClass / dap discovery).
       local test_jars = vim.fn.glob(
         vim.fn.stdpath("data") .. "/mason/packages/java-test/extension/server/*.jar",
         true, true
       )
+      test_jars = vim.tbl_filter(function(jar)
+        return not jar:match("runner%-jar%-with%-dependencies%.jar$")
+          and not jar:match("jacocoagent%.jar$")
+      end, test_jars)
       vim.list_extend(bundles, test_jars)
+      -- spring-boot.nvim (Spring Boot Language Server <-> jdtls classpath sync).
+      -- require() here force-loads the lazy plugin synchronously instead of
+      -- relying on FileType-autocmd ordering between lazy.nvim and ftplugin.
+      local sb_ok, spring_boot = pcall(require, "spring_boot")
+      if sb_ok then
+        vim.list_extend(bundles, spring_boot.java_extensions())
+      end
       return bundles
     end)(),
   },
@@ -172,19 +313,45 @@ jdtls.start_or_attach(config)
 
 -- Clean workspace and restart jdtls (use when Lombok/deps go stale)
 vim.api.nvim_create_user_command("JdtlsClean", function()
-  local clients = vim.lsp.get_clients({ name = "jdtls" })
-  if #clients > 0 then
-    vim.notify("jdtls: stopping server…", vim.log.levels.INFO)
-    vim.lsp.stop_client(clients, true)  -- true = force
-  end
-  -- Wait for jdtls to fully exit before wiping the workspace
-  vim.defer_fn(function()
+  local function wipe_and_restart()
     vim.fn.delete(workspace_dir, "rf")
     vim.notify("jdtls: workspace cleared — restarting…", vim.log.levels.INFO)
-    vim.defer_fn(function()
-      vim.cmd("edit")
-    end, 500)
-  end, 3000)  -- 3s gives jdtls time to flush and exit cleanly
+    vim.schedule(function() vim.cmd("edit") end)
+  end
+
+  local clients = vim.lsp.get_clients({ name = "jdtls" })
+  if #clients == 0 then
+    wipe_and_restart()
+    return
+  end
+
+  vim.notify("jdtls: stopping server…", vim.log.levels.INFO)
+  local pending = {}
+  for _, c in ipairs(clients) do pending[c.id] = true end
+
+  local group = vim.api.nvim_create_augroup("JdtlsCleanWait", { clear = true })
+  local done = false
+  local function finish()
+    if done then return end
+    done = true
+    pcall(vim.api.nvim_del_augroup_by_id, group)
+    wipe_and_restart()
+  end
+
+  vim.api.nvim_create_autocmd("LspDetach", {
+    group = group,
+    callback = function(args)
+      pending[args.data.client_id] = nil
+      if next(pending) == nil then
+        finish()
+      end
+    end,
+  })
+
+  -- Fail-safe in case a detach event is missed
+  vim.defer_fn(finish, 8000)
+
+  vim.lsp.stop_client(clients, true)  -- true = force
 end, { desc = "Clear jdtls workspace and restart" })
 
 vim.keymap.set("n", "<leader>jc", "<cmd>JdtlsClean<CR>", { buffer = true, desc = "Java: Clean & restart jdtls" })
