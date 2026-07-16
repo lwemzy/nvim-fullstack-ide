@@ -52,7 +52,11 @@ local config = {
             default = true,
           },
         },
-        updateBuildConfiguration = "automatic",
+        -- "automatic" silently reimports the Gradle/Maven project model on
+        -- every build-file-adjacent change — real, recurring CPU cost for
+        -- something that rarely needs to happen. "interactive" prompts
+        -- instead of doing it silently in the background.
+        updateBuildConfiguration = "interactive",
       },
       eclipse = { downloadSources = true },
       maven = { downloadSources = true },
@@ -229,7 +233,12 @@ local config = {
         end, bufnr)
       end
 
-      vim.api.nvim_create_autocmd({ "BufEnter", "CursorHold", "InsertLeave", "BufWritePost" }, {
+      -- CursorHold deliberately excluded: it fires every 'updatetime' (default
+      -- 4s) of no cursor movement, meaning jdtls would redo a references +
+      -- implementations search across the whole file every few seconds while
+      -- just reading code — real, avoidable, recurring CPU cost. BufEnter/
+      -- InsertLeave/BufWritePost are meaningful state changes; idling isn't.
+      vim.api.nvim_create_autocmd({ "BufEnter", "InsertLeave", "BufWritePost" }, {
         buffer = bufnr,
         callback = fetch_codelens,
       })
