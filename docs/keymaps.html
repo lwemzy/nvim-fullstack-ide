@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Neovim IDE — Keymap Reference</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --bg:#1F2430; --bg-alt:#1C212B; --bg-card:#232936; --line:#2A3140;
+    --fg:#CCCAC2; --fg-idle:#8B96A8; --comment:#8A94A6;
+    --accent:#FFCC66; --tag:#5CCFE6; --func:#FFD173; --entity:#73D0FF;
+    --string:#D5FF80; --markup:#F28779; --keyword:#FFAD66; --constant:#DFBFFF;
+    --border:#323A49; --shadow:0 1px 2px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  html{background:var(--bg)}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    line-height:1.5; -webkit-font-smoothing:antialiased;
+  }
+  h1,h2{text-wrap:balance}
+  header{
+    position:sticky; top:0; z-index:10;
+    background:var(--bg-alt); border-bottom:1px solid var(--border);
+    padding:22px 28px 18px;
+  }
+  h1{
+    margin:0 0 4px; font-size:1.45rem; font-weight:650; letter-spacing:-.01em;
+    color:var(--fg); display:flex; align-items:baseline; gap:9px;
+  }
+  h1 .dot{color:var(--accent); font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+  .subtitle{color:var(--comment); font-size:0.88rem; margin:0 0 16px}
+  .subtitle code{
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; color:var(--entity);
+    background:rgba(115,208,255,.1); padding:1px 5px; border-radius:4px; font-size:.85em;
+  }
+  #search{
+    width:100%; max-width:480px; padding:11px 14px;
+    background:var(--bg); border:1px solid var(--border); border-radius:8px;
+    color:var(--fg); font-size:0.95rem; outline:none; transition:border-color .15s;
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  #search::placeholder{color:var(--fg-idle)}
+  #search:focus{border-color:var(--tag); box-shadow:0 0 0 3px rgba(92,207,230,.15)}
+  #meta{color:var(--comment); font-size:0.8rem; margin-top:9px; font-variant-numeric:tabular-nums}
+  main{padding:26px 28px 64px; max-width:1200px; margin:0 auto}
+  .grid{
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(370px,1fr));
+    gap:16px; align-items:start;
+  }
+  section.cat{
+    background:var(--bg-card); border:1px solid var(--border); border-radius:10px;
+    padding:17px 19px; box-shadow:var(--shadow);
+  }
+  section.cat h2{
+    margin:0 0 4px; font-size:0.76rem; letter-spacing:.09em; text-transform:uppercase;
+    color:var(--entity); font-weight:700;
+  }
+  section.cat .cat-note{color:var(--comment); font-size:0.78rem; margin:0 0 11px; line-height:1.45}
+  table{width:100%; border-collapse:collapse}
+  tr.row{border-top:1px solid var(--line)}
+  tr.row:first-child{border-top:none}
+  td{padding:7.5px 0; vertical-align:top; font-size:0.87rem}
+  td.keys{white-space:nowrap; padding-right:16px; width:1%}
+  td.desc{color:var(--fg)}
+  .mode{
+    display:inline-block; font-size:0.65rem; font-weight:700; letter-spacing:.03em;
+    color:#161922; background:var(--fg-idle); border-radius:4px; padding:1.5px 5px;
+    margin-right:6px; vertical-align:middle;
+  }
+  .mode.n{background:var(--tag)}
+  .mode.v{background:var(--constant)}
+  .mode.i{background:var(--string)}
+  .mode.t{background:var(--markup); color:#1a1a1a}
+  kbd{
+    display:inline-block; font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    font-size:0.8rem; background:var(--bg); border:1px solid var(--border);
+    border-bottom-width:2px; border-radius:5px; padding:2px 7px; color:var(--func);
+  }
+  .note{display:block; color:var(--comment); font-size:0.76rem; margin-top:2px}
+  .note.warn{color:var(--markup)}
+  #empty{display:none; text-align:center; color:var(--comment); padding:70px 0; font-size:.92rem}
+  section.cat.hidden{display:none}
+  tr.row.hidden{display:none}
+  ::selection{background:var(--constant); color:#1a1a1a}
+  footer{text-align:center; color:var(--comment); font-size:0.78rem; padding:22px 0 44px}
+  footer code{color:var(--tag); font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+  #search:focus-visible{outline:none}
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span class="dot">❯</span> Neovim IDE Keymap Reference</h1>
+  <p class="subtitle">Java · Spring Boot · Angular/TS · Debug · Git · AI — everything bound in <code>~/.config/nvim</code></p>
+  <input id="search" type="text" placeholder="Filter shortcuts or descriptions… (e.g. &quot;breakpoint&quot;, &quot;F5&quot;, &quot;git&quot;)" autofocus>
+  <div id="meta"></div>
+</header>
+
+<main>
+  <div class="grid" id="grid"></div>
+  <div id="empty">No shortcuts match your search.</div>
+</main>
+
+<footer>Generated from <code>ftplugin/java.lua</code>, <code>lua/plugins/*.lua</code>, <code>lua/config/keymaps.lua</code> — regenerate after config changes.</footer>
+
+<script>
+const MODE_LABEL = { n:"N", v:"V", i:"I", t:"T", x:"V" };
+
+const DATA = [
+
+{cat:"Window & Splits", items:[
+  {k:["Ctrl+h/j/k/l"], m:["n","t"], d:"Move to window left/down/up/right"},
+  {k:["Ctrl+↑ / Ctrl+↓"], m:["n"], d:"Resize split taller/shorter"},
+  {k:["Ctrl+← / Ctrl+→"], m:["n"], d:"Resize split narrower/wider"},
+  {k:["Ctrl+Shift+v"], m:["n"], d:"Split window vertically"},
+  {k:["Ctrl+Shift+x"], m:["n"], d:"Split window horizontally"},
+  {k:["Ctrl+Shift+o"], m:["n"], d:"Close all other splits"},
+  {k:["Ctrl+w"], m:["n"], d:"Close current buffer", note:"overrides default window-close binding"},
+  {k:["Shift+l"], m:["n"], d:"Next buffer"},
+  {k:["Shift+h"], m:["n"], d:"Previous buffer"},
+]},
+
+{cat:"Files & Search", items:[
+  {k:["Ctrl+p"], m:["n"], d:"Find files (Telescope)"},
+  {k:["Ctrl+Shift+f"], m:["n"], d:"Live grep — search in files"},
+  {k:["Ctrl+b"], m:["n"], d:"Switch buffer (Telescope)"},
+  {k:["Ctrl+t"], m:["n"], d:"Recent files"},
+  {k:["Ctrl+e"], m:["n"], d:"Toggle file explorer (nvim-tree)"},
+  {k:["Ctrl+Shift+e"], m:["n"], d:"Reveal current file in explorer"},
+  {k:["Ctrl+s"], m:["n","i"], d:"Save file"},
+  {k:["Ctrl+q"], m:["n"], d:"Quit all"},
+  {k:["Alt+l"], m:["n"], d:"Format file (conform.nvim)", note:"also runs automatically on save"},
+]},
+
+{cat:"LSP — Global", items:[
+  {k:["gd"], m:["n"], d:"Go to definition"},
+  {k:["gD"], m:["n"], d:"Go to declaration"},
+  {k:["gr"], m:["n"], d:"Find references"},
+  {k:["gi"], m:["n"], d:"Find implementations"},
+  {k:["K"], m:["n"], d:"Hover docs"},
+  {k:["Ctrl+k"], m:["n"], d:"Signature help"},
+  {k:["F2"], m:["n"], d:"Rename symbol"},
+  {k:["leader+rn"], m:["n"], d:"Rename symbol"},
+  {k:["F4"], m:["n"], d:"Code action"},
+  {k:["leader+ca"], m:["n"], d:"Code action"},
+  {k:["F12"], m:["n"], d:"Go to definition (Telescope)"},
+  {k:["leader+lt"], m:["n"], d:"Type definition"},
+  {k:["[d"], m:["n"], d:"Previous diagnostic"},
+  {k:["]d"], m:["n"], d:"Next diagnostic"},
+  {k:["Alt+e"], m:["n"], d:"Show diagnostic detail (float)"},
+  {k:["Alt+x"], m:["n"], d:"Diagnostics list (Trouble)"},
+  {k:["F1"], m:["n"], d:"Open LSP log"},
+]},
+
+{cat:"Debug — Global (F5–F11)", items:[
+  {k:["F5"], m:["n"], d:"Continue / start debugging"},
+  {k:["F6"], m:["n"], d:"Step over"},
+  {k:["F7"], m:["n"], d:"Step into"},
+  {k:["F8"], m:["n"], d:"Step out"},
+  {k:["F9"], m:["n"], d:"Toggle breakpoint", note:"overridden by Java (see below)"},
+  {k:["F10"], m:["n"], d:"Terminate session", note:"overridden by Java (see below)"},
+  {k:["F11"], m:["n"], d:"Toggle DAP UI", note:"overridden by Java (see below)"},
+  {k:["F5 picker: “Launch file”"], m:["n"], d:"TS/JS: run current file under Node"},
+  {k:["F5 picker: “Attach to process”"], m:["n"], d:"TS/JS: attach debugger to a running Node process"},
+  {k:["F5 picker: “Launch Chrome…”"], m:["n"], d:"TS/JS: debug a running `ng serve`/`npm start` in Chrome (localhost:4200)"},
+]},
+
+{cat:"Java (buffer-local)", note:"Set in ftplugin/java.lua — active only in .java buffers, and F9/F10/F11 intentionally override the global debug bindings.", items:[
+  {k:["F9"], m:["n"], d:"Organize imports"},
+  {k:["Ctrl+Shift+o"], m:["n"], d:"Organize imports"},
+  {k:["F10"], m:["n"], d:"Run nearest test"},
+  {k:["F11"], m:["n"], d:"Run all tests in class"},
+  {k:["Ctrl+Shift+v"], m:["n"], d:"Extract variable"},
+  {k:["leader+jv"], m:["v"], d:"Extract variable (visual)"},
+  {k:["Ctrl+Shift+c"], m:["n"], d:"Extract constant"},
+  {k:["leader+jm"], m:["v"], d:"Extract method (visual)"},
+  {k:["leader+db"], m:["n"], d:"Toggle breakpoint"},
+  {k:["leader+dB"], m:["n"], d:"Conditional breakpoint (prompts for condition)"},
+  {k:["leader+dt"], m:["n"], d:"Terminate debug session"},
+  {k:["leader+du"], m:["n"], d:"Toggle DAP UI"},
+  {k:["leader+dr"], m:["n"], d:"Toggle DAP REPL"},
+  {k:["leader+dR"], m:["n"], d:"Run without debugging (discovers main class via jdtls)"},
+  {k:["leader+ds"], m:["n"], d:"Document symbols (Telescope)"},
+  {k:["leader+ws"], m:["n"], d:"Workspace symbols (Telescope)"},
+  {k:["leader+cl"], m:["n"], d:"Run code lens on current line"},
+  {k:["leader+uh"], m:["n"], d:"Toggle inlay hints"},
+  {k:["leader+jc"], m:["n"], d:"Clean jdtls workspace & restart (:JdtlsClean)"},
+  {k:["F3"], m:["n"], d:"Run Spring Boot app (mvnw/gradlew, opens terminal)", note:"global — works from any buffer in a Spring project"},
+]},
+
+{cat:"Testing (neotest)", items:[
+  {k:["Alt+t"], m:["n"], d:"Run nearest test"},
+  {k:["Alt+Shift+t"], m:["n"], d:"Run all tests in file"},
+  {k:["Alt+s"], m:["n"], d:"Toggle test summary panel"},
+  {k:["Alt+o"], m:["n"], d:"Toggle test output panel"},
+  {k:["Alt+d"], m:["n"], d:"Debug nearest test (via DAP)"},
+]},
+
+{cat:"Git", items:[
+  {k:["Alt+g"], m:["n"], d:"Toggle LazyGit"},
+  {k:["Alt+b"], m:["n"], d:"Blame current line"},
+  {k:["leader+gb"], m:["n"], d:"Blame current line"},
+  {k:["Alt+z"], m:["n"], d:"Preview hunk"},
+  {k:["leader+gp"], m:["n"], d:"Preview hunk"},
+  {k:["]g"], m:["n"], d:"Next hunk"},
+  {k:["[g"], m:["n"], d:"Previous hunk"},
+  {k:["leader+gs"], m:["n"], d:"Stage hunk"},
+  {k:["leader+gr"], m:["n"], d:"Reset hunk"},
+  {k:["leader+gS"], m:["n"], d:"Stage whole buffer"},
+  {k:["leader+gR"], m:["n"], d:"Reset whole buffer"},
+  {k:["leader+gd"], m:["n"], d:"Diff current file"},
+]},
+
+{cat:"AI — Claude", items:[
+  {k:["Ctrl+g"], m:["n"], d:"Toggle Claude panel"},
+  {k:["Ctrl+a"], m:["n"], d:"Ask Claude anything"},
+  {k:["Ctrl+1"], m:["v"], d:"Explain selected code"},
+  {k:["Ctrl+2"], m:["v"], d:"Refactor selected code"},
+  {k:["Ctrl+3"], m:["v"], d:"Generate tests for selection"},
+  {k:["Ctrl+4"], m:["v"], d:"Fix selected code"},
+  {k:["Ctrl+5"], m:["v"], d:"Generate docs for selection"},
+  {k:["Ctrl+6"], m:["v"], d:"Ask about selection"},
+]},
+
+{cat:"Tools — Find/Replace, Harpoon", items:[
+  {k:["Alt+f"], m:["n"], d:"Project-wide find & replace (grug-far)"},
+  {k:["Alt+f"], m:["v"], d:"Find & replace, prefilled with selection"},
+  {k:["Alt+a"], m:["n"], d:"Harpoon: pin current file"},
+  {k:["Alt+h"], m:["n"], d:"Harpoon: open quick menu"},
+  {k:["Alt+F1 … Alt+F4"], m:["n"], d:"Harpoon: jump to pinned file 1–4"},
+]},
+
+{cat:"Tools — HTTP client (.http files)", items:[
+  {k:["Alt+Enter"], m:["n"], d:"Run request under cursor (kulala)"},
+  {k:["Alt+p"], m:["n"], d:"Jump to previous request"},
+  {k:["Alt+n"], m:["n"], d:"Jump to next request"},
+  {k:["Alt+c"], m:["n"], d:"Copy request as curl"},
+]},
+
+{cat:"Tools — Folding, Markdown, Multi-cursor", items:[
+  {k:["zR"], m:["n"], d:"Open all folds (nvim-ufo)"},
+  {k:["zM"], m:["n"], d:"Close all folds (nvim-ufo)"},
+  {k:["Alt+p"], m:["n"], d:"Toggle rendered markdown", note:"markdown buffers only — no conflict with the HTTP Alt+p above"},
+  {k:["Ctrl+n"], m:["n"], d:"Multi-cursor: select next occurrence of word"},
+  {k:["Alt+n"], m:["n"], d:"Multi-cursor: select all occurrences"},
+  {k:["Alt+↓ / Alt+↑"], m:["n"], d:"Multi-cursor: add cursor down/up"},
+]},
+
+{cat:"Terminal", items:[
+  {k:["Ctrl+\\"], m:["n","t"], d:"Toggle terminal (toggleterm)"},
+  {k:["Alt+r"], m:["n"], d:"Run a shell command in a terminal (prompt)"},
+]},
+
+{cat:"Editing", items:[
+  {k:["J"], m:["v"], d:"Move selected lines down"},
+  {k:["K"], m:["v"], d:"Move selected lines up"},
+  {k:["Ctrl+d / Ctrl+u"], m:["n"], d:"Scroll half-page, keep cursor centred"},
+  {k:["n / N"], m:["n"], d:"Next/prev search match, keep cursor centred"},
+  {k:["Ctrl+Shift+p"], m:["v"], d:"Paste over selection without losing yank register"},
+  {k:["Ctrl+y"], m:["n","v"], d:"Copy to system clipboard"},
+  {k:["Ctrl+Shift+y"], m:["n"], d:"Copy line to system clipboard"},
+  {k:["Ctrl+/"], m:["n","v"], d:"Toggle comment"},
+  {k:["Esc"], m:["n"], d:"Clear search highlight"},
+]},
+
+{cat:"Logs & Diagnostics history", items:[
+  {k:["F1"], m:["n"], d:"Open LSP log (~/.local/state/nvim/lsp.log)"},
+  {k:["Ctrl+Shift+n"], m:["n"], d:"Notification history (Telescope)"},
+  {k:["Ctrl+Shift+l"], m:["n"], d:"Open Neovim runtime log"},
+]},
+
+];
+
+const grid = document.getElementById("grid");
+const empty = document.getElementById("empty");
+const search = document.getElementById("search");
+const meta = document.getElementById("meta");
+
+let total = 0;
+DATA.forEach(cat => total += cat.items.length);
+meta.textContent = total + " shortcuts across " + DATA.length + " categories";
+
+function clearChildren(el){
+  while (el.firstChild) el.removeChild(el.firstChild);
+}
+
+function buildModeBadge(m){
+  const span = document.createElement("span");
+  span.className = "mode " + m;
+  span.textContent = MODE_LABEL[m] || m.toUpperCase();
+  return span;
+}
+
+function buildRow(item){
+  const tr = document.createElement("tr");
+  tr.className = "row";
+  tr.dataset.hay = (item.k.join(" ") + " " + item.d + " " + (item.note||"")).toLowerCase();
+
+  const tdKeys = document.createElement("td");
+  tdKeys.className = "keys";
+  item.m.forEach(m => tdKeys.appendChild(buildModeBadge(m)));
+  item.k.forEach((k, i) => {
+    if (i > 0) tdKeys.appendChild(document.createTextNode(" "));
+    const kbd = document.createElement("kbd");
+    kbd.textContent = k;
+    tdKeys.appendChild(kbd);
+  });
+
+  const tdDesc = document.createElement("td");
+  tdDesc.className = "desc";
+  tdDesc.appendChild(document.createTextNode(item.d));
+  if (item.note) {
+    const noteSpan = document.createElement("span");
+    noteSpan.className = "note" + (item.note.startsWith("overrid") ? " warn" : "");
+    noteSpan.textContent = item.note;
+    tdDesc.appendChild(noteSpan);
+  }
+
+  tr.appendChild(tdKeys);
+  tr.appendChild(tdDesc);
+  return tr;
+}
+
+function render(){
+  clearChildren(grid);
+  DATA.forEach(cat => {
+    const section = document.createElement("section");
+    section.className = "cat";
+    section.dataset.cat = cat.cat;
+
+    const h2 = document.createElement("h2");
+    h2.textContent = cat.cat;
+    section.appendChild(h2);
+
+    if (cat.note) {
+      const p = document.createElement("p");
+      p.className = "cat-note";
+      p.textContent = cat.note;
+      section.appendChild(p);
+    }
+
+    const table = document.createElement("table");
+    const tbody = document.createElement("tbody");
+    cat.items.forEach(item => tbody.appendChild(buildRow(item)));
+    table.appendChild(tbody);
+    section.appendChild(table);
+
+    grid.appendChild(section);
+  });
+}
+
+function filter(){
+  const q = search.value.trim().toLowerCase();
+  let anyVisible = false;
+  document.querySelectorAll("section.cat").forEach(section => {
+    let sectionHasVisible = false;
+    section.querySelectorAll("tr.row").forEach(row => {
+      const match = !q || row.dataset.hay.includes(q);
+      row.classList.toggle("hidden", !match);
+      if (match) sectionHasVisible = true;
+    });
+    section.classList.toggle("hidden", !sectionHasVisible);
+    if (sectionHasVisible) anyVisible = true;
+  });
+  empty.style.display = anyVisible ? "none" : "block";
+}
+
+render();
+search.addEventListener("input", filter);
+</script>
+</body>
+</html>

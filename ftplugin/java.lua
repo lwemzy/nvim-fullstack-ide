@@ -28,7 +28,7 @@ local config = {
   cmd = (function()
     local c = {
       mason_bin,
-      "--jvm-arg=-Xmx2G",
+      "--jvm-arg=-Xmx4G",
       "--jvm-arg=-XX:+UseG1GC",
       "--jvm-arg=-XX:GCTimeRatio=4",
     }
@@ -52,7 +52,11 @@ local config = {
             default = true,
           },
         },
-        updateBuildConfiguration = "automatic",
+        -- "automatic" silently reimports the Gradle/Maven project model on
+        -- every build-file-adjacent change — real, recurring CPU cost for
+        -- something that rarely needs to happen. "interactive" prompts
+        -- instead of doing it silently in the background.
+        updateBuildConfiguration = "interactive",
       },
       eclipse = { downloadSources = true },
       maven = { downloadSources = true },
@@ -132,19 +136,31 @@ local config = {
     map("<leader>dr", function() require("dap").repl.toggle() end,       "Debug: Toggle REPL")
 
     -- Run without attaching the debugger (plain `java -cp ...` launch via jdtls)
+    -- Opens dapui explicitly rather than relying on the global
+    -- event_initialized listener: noDebug launches don't reliably fire that
+    -- event the same way a real debug session does, so the panel showing
+    -- internalConsole output could otherwise never appear even though the
+    -- program genuinely ran (confirmed via jdtls logs: LaunchWithoutDebuggingDelegate
+    -- fires fine, nothing was actually broken except visibility).
     map("<leader>dR", function()
-      require("jdtls.dap").fetch_main_configs({ config_overrides = { noDebug = true } }, function(configs)
+      require("jdtls.dap").fetch_main_configs({
+        config_overrides = { noDebug = true, console = "internalConsole" },
+      }, function(configs)
         vim.schedule(function()
           if #configs == 0 then
             vim.notify("No runnable main classes found", vim.log.levels.WARN)
           elseif #configs == 1 then
             require("dap").run(configs[1])
+            require("dapui").open()
           else
             vim.ui.select(configs, {
               prompt = "Run (no debug):",
               format_item = function(c) return c.name end,
             }, function(choice)
-              if choice then require("dap").run(choice) end
+              if choice then
+                require("dap").run(choice)
+                require("dapui").open()
+              end
             end)
           end
         end)
@@ -217,7 +233,12 @@ local config = {
         end, bufnr)
       end
 
-      vim.api.nvim_create_autocmd({ "BufEnter", "CursorHold", "InsertLeave", "BufWritePost" }, {
+      -- CursorHold deliberately excluded: it fires every 'updatetime' (default
+      -- 4s) of no cursor movement, meaning jdtls would redo a references +
+      -- implementations search across the whole file every few seconds while
+      -- just reading code — real, avoidable, recurring CPU cost. BufEnter/
+      -- InsertLeave/BufWritePost are meaningful state changes; idling isn't.
+      vim.api.nvim_create_autocmd({ "BufEnter", "InsertLeave", "BufWritePost" }, {
         buffer = bufnr,
         callback = fetch_codelens,
       })
@@ -308,7 +329,13 @@ vim.lsp.commands["_java.reloadBundles.command"] = function()
   return config.init_options and config.init_options.bundles or {}
 end
 
-pcall(jdtls.setup_dap, { hotcodereplace = "auto" })
+-- console = "internalConsole" routes stdout through DAP output events into
+-- dapui's console panel (already open), instead of spawning a separate
+-- terminal split via run_in_terminal — the latter gets evicted by dapui's
+-- own layout reorganization on session start, orphaning a buffer per run.
+-- Trade-off: internalConsole doesn't support interactive stdin (Scanner);
+-- switch back to "integratedTerminal" here if a program needs to read input.
+pcall(jdtls.setup_dap, { hotcodereplace = "auto", config_overrides = { console = "internalConsole" } })
 jdtls.start_or_attach(config)
 
 -- Clean workspace and restart jdtls (use when Lombok/deps go stale)

@@ -44,10 +44,22 @@ return {
         },
       })
 
-      -- Auto open/close UI with session
+      -- Auto open/close UI with session. noDebug (run-without-debugging)
+      -- sessions are skipped on close: a quick console app can finish and
+      -- terminate within ~1s of launch, so auto-closing on terminate/exit
+      -- tears the panel down before its console output is even visible —
+      -- it stays open afterward instead, until manually toggled/reused.
       dap.listeners.after.event_initialized["dapui"]  = function() dapui.open() end
-      dap.listeners.before.event_terminated["dapui"]  = function() dapui.close() end
-      dap.listeners.before.event_exited["dapui"]      = function() dapui.close() end
+      dap.listeners.before.event_terminated["dapui"]  = function(session)
+        if not (session and session.config and session.config.noDebug) then
+          dapui.close()
+        end
+      end
+      dap.listeners.before.event_exited["dapui"]      = function(session)
+        if not (session and session.config and session.config.noDebug) then
+          dapui.close()
+        end
+      end
 
       -- ── Inline variable values ────────────────────────────────────────
       require("nvim-dap-virtual-text").setup({
