@@ -11,14 +11,16 @@ return {
     ft = { "java", "yaml", "jproperties" },
     dependencies = { "mfussenegger/nvim-jdtls" },
     config = function()
-      require("spring_boot").setup({
-        autocmd = true,
-        server = {
-          root_dir = require("jdtls.setup").find_root({
-            ".git", "mvnw", "gradlew", "pom.xml", "build.gradle", "build.gradle.kts",
-          }),
-        },
-      })
+      -- root_dir is intentionally NOT set here: spring_boot.launch's own
+      -- fallback computes it fresh per-call via vim.fs.root(0, {...}),
+      -- which needs real per-buffer context. A static string computed once
+      -- at config-time (find_root() with no buffer, run whenever this
+      -- plugin first lazy-loads — possibly from a .yaml/.properties buffer
+      -- before any .java file is open) can resolve to an empty string,
+      -- which gets baked in permanently and produces a malformed "file://"
+      -- URI (crashing the server on every document event) for the rest of
+      -- the session.
+      require("spring_boot").setup({ autocmd = true })
     end,
   },
 }
