@@ -52,11 +52,11 @@ local config = {
             default = true,
           },
         },
-        -- "automatic" silently reimports the Gradle/Maven project model on
-        -- every build-file-adjacent change — real, recurring CPU cost for
-        -- something that rarely needs to happen. "interactive" prompts
-        -- instead of doing it silently in the background.
-        updateBuildConfiguration = "interactive",
+        -- Reimports the Gradle/Maven project model automatically whenever a
+        -- build file changes (new deps, e.g. Lombok, resolve without having
+        -- to remember to run :JdtUpdateConfig). Only costs anything at the
+        -- moment a build file is actually saved, not continuously.
+        updateBuildConfiguration = "automatic",
       },
       eclipse = { downloadSources = true },
       maven = { downloadSources = true },
