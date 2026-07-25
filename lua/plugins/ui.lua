@@ -150,9 +150,28 @@ return {
         { "<leader>j", group = "java" },
         { "<leader>l", group = "lsp" },
         { "<leader>s", group = "split" },
+        { "<leader>u", group = "ui toggles" },
+        { "<leader>uq", group = "session" },
         { "<leader>x", group = "diagnostics" },
       })
     end,
+  },
+
+  -- Inline hex/rgb/hsl color swatches
+  {
+    "catgoose/nvim-colorizer.lua",
+    event = { "BufReadPre", "BufNewFile" },
+    opts = {
+      filetypes = { "css", "scss", "html", "typescript", "typescriptreact", "javascript", "lua" },
+      user_default_options = {
+        RGB = true,
+        RRGGBB = true,
+        RRGGBBAA = true,
+        css = true,
+        css_fn = true,
+        tailwind = true,
+      },
+    },
   },
 
   -- Notifications + history

@@ -151,4 +151,16 @@ return {
       })
     end,
   },
+
+  -- ── Session management: auto-save/restore per project dir ────────────────
+  {
+    "folke/persistence.nvim",
+    event = "BufReadPre",
+    opts = {},
+    keys = {
+      { "<leader>uqs", function() require("persistence").load() end,                          desc = "Restore session" },
+      { "<leader>uql", function() require("persistence").load({ last = true }) end,            desc = "Restore last session" },
+      { "<leader>uqd", function() require("persistence").stop() end,                           desc = "Don't save session" },
+    },
+  },
 }

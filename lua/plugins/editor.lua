@@ -1,4 +1,32 @@
 return {
+  -- Fast jump-to-any-location motions
+  {
+    "folke/flash.nvim",
+    event = "VeryLazy",
+    opts = {},
+    keys = {
+      { "s", mode = { "n", "x", "o" }, function() require("flash").jump() end,        desc = "Flash jump" },
+      { "S", mode = { "n", "x", "o" }, function() require("flash").treesitter() end,  desc = "Flash treesitter" },
+      { "r", mode = "o",               function() require("flash").remote() end,      desc = "Remote flash" },
+      { "R", mode = { "o", "x" },      function() require("flash").treesitter_search() end, desc = "Treesitter search" },
+    },
+  },
+
+  -- Highlight other references to the symbol under the cursor
+  {
+    "RRethy/vim-illuminate",
+    event = { "BufReadPost", "BufNewFile" },
+    config = function()
+      require("illuminate").configure({
+        providers = { "lsp", "treesitter", "regex" },
+        delay = 200,
+        filetypes_denylist = { "NvimTree", "toggleterm", "TelescopePrompt" },
+      })
+      vim.keymap.set("n", "]]", function() require("illuminate").goto_next_reference() end, { desc = "Next reference" })
+      vim.keymap.set("n", "[[", function() require("illuminate").goto_prev_reference() end, { desc = "Prev reference" })
+    end,
+  },
+
   -- Auto bracket/quote pairs
   {
     "windwp/nvim-autopairs",

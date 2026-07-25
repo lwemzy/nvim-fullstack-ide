@@ -119,6 +119,10 @@ map("n", "<M-z>", "<cmd>Gitsigns preview_hunk<CR>", { desc = "Git: Preview hunk"
 map("v", "J", ":m '>+1<CR>gv=gv", { silent = true, desc = "Move selection down" })
 map("v", "K", ":m '<-2<CR>gv=gv", { silent = true, desc = "Move selection up" })
 
+-- Move current line up/down in normal mode (no selection needed)
+map("n", "<M-j>", ":m .+1<CR>==", { silent = true, desc = "Move line down" })
+map("n", "<M-k>", ":m .-2<CR>==", { silent = true, desc = "Move line up" })
+
 -- Scroll and keep cursor centred
 map("n", "<C-d>", "<C-d>zz")
 map("n", "<C-u>", "<C-u>zz")
