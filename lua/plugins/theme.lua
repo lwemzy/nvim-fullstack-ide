@@ -17,6 +17,11 @@ return {
           RainbowDelimiterCyan   = { fg = "#5ccfe6" }, -- tag
           RainbowDelimiterBlue   = { fg = "#73d0ff" }, -- entity
           RainbowDelimiterViolet = { fg = "#dfbfff" }, -- constant
+
+          -- Matching brace/paren highlight (VS Code-style bracket-pair box)
+          -- when the cursor sits on either one. Built-in matchparen, just
+          -- restyled from a plain underline to ayu-mirage's selection color.
+          MatchParen = { bg = "#274364", bold = true, underline = false },
         },
       })
       vim.cmd.colorscheme("ayu-mirage")
