@@ -42,6 +42,13 @@ return {
     end,
   },
 
+  -- Sticky enclosing function/class signature at the top of the window
+  {
+    "nvim-treesitter/nvim-treesitter-context",
+    event = { "BufReadPost", "BufNewFile" },
+    opts = { max_lines = 3 },
+  },
+
   -- Auto-close and auto-rename HTML / JSX / TSX tags
   {
     "windwp/nvim-ts-autotag",

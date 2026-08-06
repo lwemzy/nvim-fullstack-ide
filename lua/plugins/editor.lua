@@ -88,6 +88,17 @@ return {
     end,
   },
 
+  -- Full side-by-side diff view + file history (beyond gitsigns' hunk preview)
+  {
+    "sindrets/diffview.nvim",
+    dependencies = { "nvim-lua/plenary.nvim" },
+    cmd = { "DiffviewOpen", "DiffviewFileHistory", "DiffviewClose" },
+    keys = {
+      { "<leader>gv", "<cmd>DiffviewOpen<CR>",         desc = "Git: Diff view" },
+      { "<leader>gh", "<cmd>DiffviewFileHistory<CR>",  desc = "Git: File history" },
+    },
+  },
+
   -- Formatter
   {
     "stevearc/conform.nvim",

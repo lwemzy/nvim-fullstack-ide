@@ -174,6 +174,13 @@ return {
     },
   },
 
+  -- LSP progress/status messages (e.g. "jdtls: Building workspace 63%")
+  {
+    "j-hui/fidget.nvim",
+    event = "LspAttach",
+    opts = {},
+  },
+
   -- Notifications + history
   {
     "rcarriga/nvim-notify",

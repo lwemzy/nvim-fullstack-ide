@@ -22,7 +22,11 @@ return {
         cmd       = "lazygit",
         hidden    = true,
         direction = "float",
-        float_opts = { border = "rounded", width = 0.95, height = 0.9 },
+        float_opts = {
+          border = "rounded",
+          width  = function() return math.floor(vim.o.columns * 0.95) end,
+          height = function() return math.floor(vim.o.lines * 0.9) end,
+        },
         on_open = function(term)
           vim.keymap.set("t", "<M-g>", function() term:toggle() end, { buffer = term.bufnr })
         end,
