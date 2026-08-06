@@ -83,7 +83,7 @@ map("n", "<M-x>", "<cmd>Trouble diagnostics toggle<CR>",{ desc = "Diagnostics li
 -- ── Buffer tabs ────────────────────────────────────────────────────────────
 map("n", "<S-l>", ":bnext<CR>",     { silent = true, desc = "Next buffer" })
 map("n", "<S-h>", ":bprevious<CR>", { silent = true, desc = "Prev buffer" })
-map("n", "<C-w>", ":bdelete<CR>",   { silent = true, desc = "Close buffer" })
+map("n", "<C-w>", function() require("bufdelete").bufdelete(0, false) end, { silent = true, desc = "Close buffer" })
 
 -- ── Split windows ──────────────────────────────────────────────────────────
 map("n", "<C-S-v>", ":vsplit<CR>",  { silent = true, desc = "Split vertical" })

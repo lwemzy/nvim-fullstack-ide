@@ -124,6 +124,10 @@ return {
       { "<F9>",  function() require("dap").toggle_breakpoint() end, desc = "Debug: Toggle breakpoint" },
       { "<F10>", function() require("dap").terminate() end,         desc = "Debug: Terminate" },
       { "<F11>", function() require("dapui").toggle() end,          desc = "Debug: Toggle UI" },
+      { "<S-F9>", function()
+        require("dap").set_breakpoint(vim.fn.input("Breakpoint condition: "))
+      end, desc = "Debug: Conditional breakpoint" },
+      { "<C-F5>", function() require("dap").run_last() end,         desc = "Debug: Run last" },
     },
   },
 }

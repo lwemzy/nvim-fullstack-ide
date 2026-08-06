@@ -111,6 +111,18 @@ return {
         if caps.codeActionProvider then
           map("<leader>ca", vim.lsp.buf.code_action, "Code action")
         end
+        if caps.documentSymbolProvider then
+          map("<leader>ls", "<cmd>Telescope lsp_document_symbols<CR>", "Document symbols")
+        end
+        if caps.workspaceSymbolProvider then
+          map("<leader>lw", "<cmd>Telescope lsp_dynamic_workspace_symbols<CR>", "Workspace symbols")
+        end
+        if caps.inlayHintProvider then
+          vim.lsp.inlay_hint.enable(true, { bufnr = bufnr })
+          map("<leader>uh", function()
+            vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }), { bufnr = bufnr })
+          end, "Toggle inlay hints")
+        end
       end
 
       -- ── Apply capabilities + on_attach to EVERY server via wildcard ─────

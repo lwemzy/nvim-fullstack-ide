@@ -27,6 +27,11 @@ return {
   },
 
   -- Buffer tabs
+  -- Closes a buffer without disturbing window layout — switches affected
+  -- windows to a sensible sibling buffer first, instead of leaving Neovim
+  -- to improvise (which is what let other splits expand into the gap).
+  { "famiu/bufdelete.nvim", lazy = true },
+
   {
     "akinsho/bufferline.nvim",
     dependencies = { "nvim-tree/nvim-web-devicons" },
@@ -44,6 +49,10 @@ return {
               .. (diag.warning and icons.warning .. diag.warning or "")
             return vim.trim(ret)
           end,
+          -- Default close_command is a plain "bdelete! %d", which doesn't
+          -- pick a sibling buffer before closing (see bufdelete.nvim above).
+          close_command = function(bufnum) require("bufdelete").bufdelete(bufnum, false) end,
+          right_mouse_command = function(bufnum) require("bufdelete").bufdelete(bufnum, false) end,
           offsets = {
             {
               filetype = "NvimTree",
