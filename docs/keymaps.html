@@ -117,7 +117,7 @@ const DATA = [
   {k:["Ctrl+Shift+v"], m:["n"], d:"Split window vertically"},
   {k:["Ctrl+Shift+x"], m:["n"], d:"Split window horizontally"},
   {k:["Ctrl+Shift+o"], m:["n"], d:"Close all other splits"},
-  {k:["Ctrl+w"], m:["n"], d:"Close current buffer", note:"overrides default window-close binding"},
+  {k:["Ctrl+w"], m:["n"], d:"Close current buffer", note:"uses bufdelete.nvim — switches to a sibling buffer instead of disturbing window layout"},
   {k:["Shift+l"], m:["n"], d:"Next buffer"},
   {k:["Shift+h"], m:["n"], d:"Previous buffer"},
 ]},
@@ -147,6 +147,11 @@ const DATA = [
   {k:["leader+ca"], m:["n"], d:"Code action"},
   {k:["F12"], m:["n"], d:"Go to definition (Telescope)"},
   {k:["leader+lt"], m:["n"], d:"Type definition"},
+  {k:["leader+ls"], m:["n"], d:"Document symbols (Telescope)"},
+  {k:["leader+lw"], m:["n"], d:"Workspace symbols (Telescope)"},
+  {k:["leader+lc"], m:["n"], d:"Incoming calls — who calls this (call hierarchy)"},
+  {k:["leader+lC"], m:["n"], d:"Outgoing calls — what this calls (call hierarchy)"},
+  {k:["leader+uh"], m:["n"], d:"Toggle inlay hints", note:"any server that supports them — Java, TS/JS, etc."},
   {k:["[d"], m:["n"], d:"Previous diagnostic"},
   {k:["]d"], m:["n"], d:"Next diagnostic"},
   {k:["Alt+e"], m:["n"], d:"Show diagnostic detail (float)"},
@@ -162,12 +167,14 @@ const DATA = [
   {k:["F9"], m:["n"], d:"Toggle breakpoint", note:"overridden by Java (see below)"},
   {k:["F10"], m:["n"], d:"Terminate session", note:"overridden by Java (see below)"},
   {k:["F11"], m:["n"], d:"Toggle DAP UI", note:"overridden by Java (see below)"},
+  {k:["Shift+F9"], m:["n"], d:"Conditional breakpoint (prompts for condition)"},
+  {k:["Ctrl+F5"], m:["n"], d:"Run last debug configuration"},
   {k:["F5 picker: “Launch file”"], m:["n"], d:"TS/JS: run current file under Node"},
   {k:["F5 picker: “Attach to process”"], m:["n"], d:"TS/JS: attach debugger to a running Node process"},
   {k:["F5 picker: “Launch Chrome…”"], m:["n"], d:"TS/JS: debug a running `ng serve`/`npm start` in Chrome (localhost:4200)"},
 ]},
 
-{cat:"Java (buffer-local)", note:"Set in ftplugin/java.lua — active only in .java buffers, and F9/F10/F11 intentionally override the global debug bindings.", items:[
+{cat:"Java (buffer-local)", note:"Set in ftplugin/java.lua — active only in .java buffers, and F9/F10/F11 intentionally override the global debug bindings. jdtls has its own separate on_attach (predates the shared one), so ds/ws below predate — and duplicate — the global ls/lw convention; leader+lc/lC (call hierarchy) work identically to the global entries above.", items:[
   {k:["F9"], m:["n"], d:"Organize imports"},
   {k:["Ctrl+Shift+o"], m:["n"], d:"Organize imports"},
   {k:["F10"], m:["n"], d:"Run nearest test"},
@@ -185,7 +192,6 @@ const DATA = [
   {k:["leader+ds"], m:["n"], d:"Document symbols (Telescope)"},
   {k:["leader+ws"], m:["n"], d:"Workspace symbols (Telescope)"},
   {k:["leader+cl"], m:["n"], d:"Run code lens on current line"},
-  {k:["leader+uh"], m:["n"], d:"Toggle inlay hints"},
   {k:["leader+jc"], m:["n"], d:"Clean jdtls workspace & restart (:JdtlsClean)"},
   {k:["F3"], m:["n"], d:"Run Spring Boot app (mvnw/gradlew, opens terminal)", note:"global — works from any buffer in a Spring project"},
 ]},
@@ -211,6 +217,8 @@ const DATA = [
   {k:["leader+gS"], m:["n"], d:"Stage whole buffer"},
   {k:["leader+gR"], m:["n"], d:"Reset whole buffer"},
   {k:["leader+gd"], m:["n"], d:"Diff current file"},
+  {k:["leader+gv"], m:["n"], d:"Open full diff view (diffview.nvim)"},
+  {k:["leader+gh"], m:["n"], d:"File history (diffview.nvim)"},
 ]},
 
 {cat:"AI — Claude", items:[
@@ -248,6 +256,21 @@ const DATA = [
   {k:["Alt+↓ / Alt+↑"], m:["n"], d:"Multi-cursor: add cursor down/up"},
 ]},
 
+{cat:"Navigation (Flash / Illuminate)", items:[
+  {k:["s"], m:["n","v"], d:"Flash jump — type 2 chars, jump to any visible match"},
+  {k:["S"], m:["n","v"], d:"Flash treesitter jump — jump to a syntax node"},
+  {k:["r"], m:["n"], d:"Flash remote — operate on a distant match without moving there", note:"operator-pending mode, e.g. dr + flash target"},
+  {k:["R"], m:["n","v"], d:"Flash treesitter search"},
+  {k:["]]"], m:["n"], d:"Jump to next reference of symbol under cursor (illuminate)"},
+  {k:["[["], m:["n"], d:"Jump to previous reference of symbol under cursor (illuminate)"},
+]},
+
+{cat:"Session (persistence.nvim)", items:[
+  {k:["leader+uqs"], m:["n"], d:"Restore session for current directory"},
+  {k:["leader+uql"], m:["n"], d:"Restore last session (any directory)"},
+  {k:["leader+uqd"], m:["n"], d:"Stop saving session for this run"},
+]},
+
 {cat:"Terminal", items:[
   {k:["Ctrl+\\"], m:["n","t"], d:"Toggle terminal (toggleterm)"},
   {k:["Alt+r"], m:["n"], d:"Run a shell command in a terminal (prompt)"},
@@ -256,6 +279,8 @@ const DATA = [
 {cat:"Editing", items:[
   {k:["J"], m:["v"], d:"Move selected lines down"},
   {k:["K"], m:["v"], d:"Move selected lines up"},
+  {k:["Alt+j"], m:["n"], d:"Move current line down"},
+  {k:["Alt+k"], m:["n"], d:"Move current line up"},
   {k:["Ctrl+d / Ctrl+u"], m:["n"], d:"Scroll half-page, keep cursor centred"},
   {k:["n / N"], m:["n"], d:"Next/prev search match, keep cursor centred"},
   {k:["Ctrl+Shift+p"], m:["v"], d:"Paste over selection without losing yank register"},
