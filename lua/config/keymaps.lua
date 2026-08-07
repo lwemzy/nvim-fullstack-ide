@@ -48,6 +48,10 @@ map("n", "<C-S-e>", ":NvimTreeFindFile<CR>", { silent = true, desc = "Reveal fil
 -- nothing. Ctrl+B was free to take because the buffer list it used to open has
 -- moved to <leader>bb — see the Telescope section below.
 map("n", "<C-b>", ":NvimTreeToggle<CR>",   { silent = true, desc = "Toggle explorer (sidebar)" })
+-- Cmd+B is both VS Code's sidebar chord on macOS and one of the handful of Cmd
+-- keys Ghostty leaves alone, so the Mac alias and the VS Code chord are the
+-- same key here. Both of the above stay: this is an alias, not a replacement.
+map("n", "<D-b>", ":NvimTreeToggle<CR>",   { silent = true, desc = "Toggle explorer (macOS)" })
 
 -- ── Telescope / Search ─────────────────────────────────────────────────────
 -- The VS Code chords, in the order their names appear in its Command Palette:
@@ -80,9 +84,11 @@ map("n", "<C-f>", "/", { desc = "Find in this file" })
 map("n", "<C-S-p>", "<cmd>Telescope commands<CR>", { desc = "Command palette" })
 map("n", "<leader>bb", "<cmd>Telescope buffers<CR>", { desc = "Switch buffer" })
 map("n", "<leader>fr", "<cmd>Telescope oldfiles<CR>", { desc = "Recent files" })
+map("n", "<D-p>", "<cmd>Telescope find_files<CR>",  { desc = "Find files (macOS)" })
 
 -- ── Save / Quit ────────────────────────────────────────────────────────────
 map({ "n", "i" }, "<C-s>", "<Esc>:w<CR>",  { silent = true, desc = "Save file" })
+map({ "n", "i" }, "<D-s>", "<Esc>:w<CR>",  { silent = true, desc = "Save file (macOS)" })
 -- C-q: overrides visual-block-2 (C-v still works for that)
 map("n", "<C-q>", ":qa<CR>", { silent = true, desc = "Quit all" })
 
@@ -391,6 +397,14 @@ map("n", "<C-_>", comment_line,    { desc = "Toggle comment" })
 map("x", "<C-_>", comment_visual,  { desc = "Toggle comment" })
 map("n", "<C-/>", comment_line,    { desc = "Toggle comment" })
 map("x", "<C-/>", comment_visual,  { desc = "Toggle comment" })
+-- Cmd+/ is what every editor on this platform uses for comment-toggle, and
+-- Ghostty passes it through. Mode "x", not "v", for the same reason the Ctrl
+-- variants above use it: "v" covers visual *and* select mode, and select mode is
+-- where LuaSnip puts you on a snippet placeholder — there a printable key is
+-- meant to replace the selection, so a "v" mapping made typing over a
+-- placeholder toggle comments instead.
+map("n", "<D-/>", comment_line,    { desc = "Toggle comment (macOS)" })
+map("x", "<D-/>", comment_visual,  { desc = "Toggle comment (macOS)" })
 
 -- Block comment — VS Code's Shift+Alt+A. The linewise toggles above comment each
 -- line with `//`; this wraps the region in `/* */` instead, which is the
