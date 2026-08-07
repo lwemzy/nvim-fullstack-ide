@@ -18,13 +18,17 @@ autocmd("BufReadPost", {
   end,
 })
 
--- Java: use 4-space indent (convention)
+-- Java: 2-space indent (Google Java Style Guide §4.2) — matches
+-- java-google-style.xml's actual formatter output (ftplugin/java.lua),
+-- so what you type before format-on-save already looks like the result.
 autocmd("FileType", {
   group = augroup("java_settings", { clear = true }),
   pattern = "java",
   callback = function()
-    vim.opt_local.tabstop = 4
-    vim.opt_local.shiftwidth = 4
+    vim.opt_local.tabstop = 2
+    vim.opt_local.shiftwidth = 2
+    -- Google style §4.4: line length is 100 columns
+    vim.opt_local.colorcolumn = "100"
   end,
 })
 
