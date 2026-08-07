@@ -103,6 +103,25 @@ return {
   {
     "stevearc/conform.nvim",
     config = function()
+      -- Projects with no prettier config of their own (no .prettierrc*, no
+      -- prettier.config.*, no "prettier" key in package.json) don't actually
+      -- use Prettier — running it anyway applies its defaults (e.g. double
+      -- quotes), which can fight a project's own ESLint style rules and undo
+      -- its fix-on-save right after it runs.
+      local function has_prettier_config(_, ctx)
+        return vim.fs.find({
+          ".prettierrc", ".prettierrc.json", ".prettierrc.yml", ".prettierrc.yaml",
+          ".prettierrc.js", ".prettierrc.cjs", ".prettierrc.mjs",
+          "prettier.config.js", "prettier.config.cjs", "prettier.config.mjs",
+        }, { path = ctx.dirname, upward = true })[1] ~= nil
+          or (function()
+            local pkg = vim.fs.find("package.json", { path = ctx.dirname, upward = true })[1]
+            if not pkg then return false end
+            local ok, decoded = pcall(vim.json.decode, table.concat(vim.fn.readfile(pkg), "\n"))
+            return ok and decoded.prettier ~= nil
+          end)()
+      end
+
       require("conform").setup({
         formatters_by_ft = {
           javascript      = { "prettierd", "prettier", stop_after_first = true },
@@ -131,6 +150,10 @@ return {
               -- Ensure mason's prettierd is found even if not in system PATH
               PATH = vim.fn.stdpath("data") .. "/mason/bin:" .. vim.env.PATH,
             },
+            condition = has_prettier_config,
+          },
+          prettier = {
+            condition = has_prettier_config,
           },
         },
       })

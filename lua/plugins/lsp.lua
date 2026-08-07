@@ -138,6 +138,13 @@ return {
       -- TS server there.
       local ts_ls_default_root_dir = vim.lsp.config.ts_ls.root_dir
       vim.lsp.config("ts_ls", {
+        -- Per-server vim.lsp.config() overrides don't reliably inherit
+        -- on_attach from the "*" wildcard config in practice — re-attach it
+        -- explicitly here (same fix already applied below for lua_ls/jsonls/
+        -- yamlls/html; eslint already did this itself). Without it, none of
+        -- on_attach's keymaps (gd, gr, gi, K, <leader>rn/ca/ls/lw, inlay
+        -- hints) get set for this server.
+        on_attach = on_attach,
         root_dir = function(bufnr, on_dir)
           if vim.fs.root(bufnr, { "angular.json" }) then
             return
@@ -177,6 +184,7 @@ return {
       })
 
       vim.lsp.config("lua_ls", {
+        on_attach = on_attach,
         settings = {
           Lua = {
             workspace = { checkThirdParty = false },
@@ -188,6 +196,7 @@ return {
 
       local ss_ok, schemastore = pcall(require, "schemastore")
       vim.lsp.config("jsonls", {
+        on_attach = on_attach,
         settings = {
           json = {
             schemas = ss_ok and schemastore.json.schemas() or {},
@@ -197,6 +206,7 @@ return {
       })
 
       vim.lsp.config("yamlls", {
+        on_attach = on_attach,
         settings = {
           yaml = {
             schemaStore = { enable = false, url = "" },
@@ -225,6 +235,7 @@ return {
       -- Disable inline CSS validation in HTML files — the CSS language service
       -- inside html-lsp crashes on null config when validating inline styles
       vim.lsp.config("html", {
+        on_attach = on_attach,
         settings = {
           html = {
             validate = { scripts = true, styles = false },

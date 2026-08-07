@@ -1,5 +1,16 @@
 local map = vim.keymap.set
 
+-- ── Clear core's built-in gr*/gO defaults (nvim 0.11+) ─────────────────────
+-- Neovim ships grn/gra/grr/gri/grt/grx unconditionally (see :help grr). Their
+-- shared "gr" prefix makes this config's own bare `gr` (references, set in
+-- lsp.lua's on_attach) ambiguous, so a group popup shows instead of jumping
+-- straight to references. Delete the ones this config doesn't use so `gr`
+-- fires immediately again; rename/code-action stay reachable via <leader>rn/ca.
+for _, lhs in ipairs({ "grn", "gra", "grr", "gri", "grt", "grx" }) do
+  pcall(vim.keymap.del, "n", lhs)
+end
+pcall(vim.keymap.del, "x", "gra")
+
 -- ── Window navigation (Ctrl + h/j/k/l) ────────────────────────────────────
 -- Normal mode
 map("n", "<C-h>", "<C-w>h", { desc = "Window left" })
