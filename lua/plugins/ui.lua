@@ -110,6 +110,7 @@ return {
     dependencies = {
       "nvim-lua/plenary.nvim",
       { "nvim-telescope/telescope-fzf-native.nvim", build = "make" },
+      "nvim-telescope/telescope-ui-select.nvim",
     },
     config = function()
       local telescope = require("telescope")
@@ -118,7 +119,11 @@ return {
         defaults = {
           file_ignore_patterns = { "node_modules", "%.git/", "target/", "build/" },
           layout_strategy = "horizontal",
-          layout_config = { preview_width = 0.55, height = 0.8 },
+          -- preview_width nested under horizontal (not flat/global): the
+          -- "center" strategy (used by telescope-ui-select's dropdown below)
+          -- strictly rejects any top-level layout_config key it doesn't
+          -- recognize, and preview_width is horizontal/vertical/flex-only.
+          layout_config = { horizontal = { preview_width = 0.55 }, height = 0.8 },
           mappings = {
             i = {
               ["<C-k>"] = actions.move_selection_previous,
@@ -127,8 +132,18 @@ return {
             },
           },
         },
+        extensions = {
+          -- Routes vim.ui.select() through a Telescope dropdown instead of
+          -- the plain numbered command-line list — used by code actions
+          -- (Ctrl+./F4), jdtls's Generate/Override menus, and anywhere else
+          -- vim.ui.select shows up.
+          ["ui-select"] = {
+            require("telescope.themes").get_dropdown({}),
+          },
+        },
       })
       telescope.load_extension("fzf")
+      telescope.load_extension("ui-select")
     end,
   },
 

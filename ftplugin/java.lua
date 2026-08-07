@@ -69,8 +69,13 @@ local config = {
       format = {
         enabled = true,
         settings = {
-          -- Uses Google Java Style by default; point to a custom XML if needed
-          -- url = vim.fn.expand("~/.config/nvim/java-style.xml"),
+          -- Google Java Style Guide (https://google.github.io/styleguide/javaguide.html),
+          -- via Google's own official Eclipse formatter profile. Without a url set
+          -- here, jdtls silently falls back to Eclipse's own default profile —
+          -- which is NOT Google style (different import layout, no enforced
+          -- 100-col wrap, etc.) — despite what this comment used to claim.
+          url = vim.fn.stdpath("config") .. "/java-google-style.xml",
+          profile = "GoogleStyle",
         },
       },
       signatureHelp = { enabled = true },
@@ -83,10 +88,9 @@ local config = {
           "org.mockito.Mockito.*",
           "org.hamcrest.Matchers.*",
         },
-        importOrder = {
-          "java", "javax", "jakarta",
-          "org.springframework", "com", "org", "net", "",
-        },
+        -- Google style doesn't group imports by package prefix — one ASCII-sorted
+        -- block per §3.3.3. A single "" entry means "everything, ungrouped".
+        importOrder = { "" },
       },
       sources = {
         organizeImports = {
@@ -111,6 +115,8 @@ local config = {
     map("gi", "<cmd>Telescope lsp_implementations<CR>", "Find implementations")
     map("<leader>ds", "<cmd>Telescope lsp_document_symbols<CR>", "Document symbols")
     map("<leader>ws", "<cmd>Telescope lsp_dynamic_workspace_symbols<CR>", "Workspace symbols")
+    map("<leader>lc", vim.lsp.buf.incoming_calls, "Incoming calls (callers)")
+    map("<leader>lC", vim.lsp.buf.outgoing_calls, "Outgoing calls (callees)")
     map("K", vim.lsp.buf.hover, "Hover docs")
     map("<C-k>", vim.lsp.buf.signature_help, "Signature help")
     map("<leader>rn", vim.lsp.buf.rename, "Rename symbol")

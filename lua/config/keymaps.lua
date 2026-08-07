@@ -36,12 +36,16 @@ map("n", "<C-S-e>", ":NvimTreeFindFile<CR>", { silent = true, desc = "Reveal fil
 map("n", "<D-b>", ":NvimTreeToggle<CR>",   { silent = true, desc = "Toggle explorer (macOS)" })
 
 -- ── Telescope / Search ─────────────────────────────────────────────────────
--- C-p = find files  (like VS Code)       overrides: prev completion (Tab still works)
--- C-f = live grep   (like "Find in Files") overrides: page-forward  (C-d still scrolls)
--- C-b = open buffers                      overrides: page-back      (C-u still scrolls)
--- C-t = recent files                      overrides: tag-jump       (rarely used)
+-- C-p     = find files  (like VS Code)       overrides: prev completion (Tab still works)
+-- leader+/ = live grep  (like "Find in Files") — see note below on why not a Ctrl+Shift combo
+-- C-b     = open buffers                      overrides: page-back      (C-u still scrolls)
+-- C-t     = recent files                      overrides: tag-jump       (rarely used)
 map("n", "<C-p>", "<cmd>Telescope find_files<CR>",  { desc = "Find files" })
-map("n", "<C-s-f>", function() require("telescope.builtin").live_grep() end, { desc = "Live grep (search in files)" })
+-- leader+/ (not Ctrl+Shift+F): terminal emulators commonly claim Ctrl+Shift+F
+-- as their own "find in terminal" shortcut, which swallows the keypress
+-- before Neovim ever sees it. leader (Space) has no modifier key for a
+-- terminal to intercept, so it always reaches Neovim.
+map("n", "<leader>/", function() require("telescope.builtin").live_grep() end, { desc = "Live grep (search in files)" })
 map("n", "<C-b>", "<cmd>Telescope buffers<CR>", { desc = "Switch buffer" })
 map("n", "<C-t>", "<cmd>Telescope oldfiles<CR>",    { desc = "Recent files" })
 map("n", "<D-p>", "<cmd>Telescope find_files<CR>",  { desc = "Find files (macOS)" })
@@ -61,14 +65,16 @@ end, { desc = "Format file" })
 
 -- ── LSP actions ───────────────────────────────────────────────────────────
 map("n", "<F2>",  vim.lsp.buf.rename,                   { desc = "Rename symbol" })
-map("n", "<F4>", function()
+local function code_action()
   local clients = vim.lsp.get_clients({ bufnr = 0 })
   if #clients == 0 then
     vim.notify("No LSP attached to this buffer", vim.log.levels.WARN)
     return
   end
   vim.lsp.buf.code_action()
-end, { desc = "Code action" })
+end
+map("n", "<F4>", code_action, { desc = "Code action" })
+map("n", "<C-.>", code_action, { desc = "Code action (VS Code-style quick fix)" })
 map("n", "<F12>", "<cmd>Telescope lsp_definitions<CR>", { desc = "Go to definition" })
 
 -- ── Diagnostics ────────────────────────────────────────────────────────────

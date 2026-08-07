@@ -48,7 +48,10 @@ return {
     dependencies = { "williamboman/mason.nvim" },
     config = function()
       require("mason-tool-installer").setup({
-        ensure_installed = { "prettierd", "vscode-spring-boot-tools" },
+        -- plain prettier (not just prettierd): the daemon doesn't accept
+        -- ad-hoc CLI overrides, needed for the Google-style fallback in
+        -- plugins/editor.lua's conform.nvim config.
+        ensure_installed = { "prettierd", "prettier", "vscode-spring-boot-tools" },
         run_on_start = true,
       })
     end,
@@ -123,6 +126,12 @@ return {
             vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }), { bufnr = bufnr })
           end, "Toggle inlay hints")
         end
+        if caps.callHierarchyProvider then
+          -- Call hierarchy (who calls this / what does this call), quickfix-based
+          -- since Telescope has no built-in call-hierarchy picker to route through.
+          map("<leader>lc", vim.lsp.buf.incoming_calls, "Incoming calls (callers)")
+          map("<leader>lC", vim.lsp.buf.outgoing_calls, "Outgoing calls (callees)")
+        end
       end
 
       -- ── Apply capabilities + on_attach to EVERY server via wildcard ─────
@@ -169,6 +178,24 @@ return {
             },
           },
         },
+      })
+
+      -- angularls's own root_markers (angular.json/nx.json, from lspconfig's
+      -- runtime/lsp/angularls.lua) only govern the *cmd* it builds — nothing
+      -- stops it attaching outside an Angular project, since the framework
+      -- falls back to cwd as a "single file" root when no marker is found.
+      -- That meant angularls attached to *every* TypeScript file, Angular or
+      -- not, duplicating ts_ls's diagnostics/navic attach exactly the same
+      -- way the ts_ls override above exists to prevent — just backwards.
+      -- Mirror that override: only start angularls when angular.json/nx.json
+      -- actually exists upward from the buffer.
+      vim.lsp.config("angularls", {
+        on_attach = on_attach,
+        root_dir = function(bufnr, on_dir)
+          local root = vim.fs.root(bufnr, { "angular.json", "nx.json" })
+          if root then on_dir(root) end
+        end,
+        single_file_support = false,
       })
 
       vim.lsp.config("eslint", {
@@ -246,6 +273,7 @@ return {
       -- ── Enable servers (jdtls is handled separately by ftplugin/java.lua) ─
       -- Emmet language server config
       vim.lsp.config("emmet_language_server", {
+        on_attach = on_attach,
         filetypes = {
           "html", "css", "scss", "javascript", "typescript",
           "javascriptreact", "typescriptreact", "xml",

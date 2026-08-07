@@ -198,9 +198,19 @@ function M.ask(prompt, title)
         end)
       end
     end,
-    on_exit = function()
+    on_exit = function(_, exit_code)
       vim.schedule(function()
-        if vim.api.nvim_buf_is_valid(buf) then
+        if not vim.api.nvim_buf_is_valid(buf) then return end
+        -- jobstart's on_stdout fires once with data={""} on stream close
+        -- even when the command produced no real output, so `#output`
+        -- alone can't tell "got nothing" apart from "got one empty line".
+        local has_output = table.concat(output, "\n"):match("%S") ~= nil
+        if exit_code ~= 0 and not has_output then
+          vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+            "  Claude exited with an error (code " .. exit_code .. ").",
+            "  Check that `claude` is installed and authenticated.",
+          })
+        else
           vim.api.nvim_buf_set_lines(buf, 0, -1, false, output)
         end
       end)
@@ -220,18 +230,32 @@ local function get_visual_selection()
   return table.concat(lines, "\n")
 end
 
-function M.explain()
+-- Visual-mode AI commands need a real selection; guards against a stray
+-- keypress (or the marks not being where expected) firing an empty-code request.
+local function get_selection_or_warn()
   local code = get_visual_selection()
+  if code == "" then
+    vim.notify("No text selected", vim.log.levels.WARN)
+    return nil
+  end
+  return code
+end
+
+function M.explain()
+  local code = get_selection_or_warn()
+  if not code then return end
   M.ask(file_prefix() .. "Explain this code clearly and concisely:\n\n```\n" .. code .. "\n```", "Explain")
 end
 
 function M.refactor()
-  local code = get_visual_selection()
+  local code = get_selection_or_warn()
+  if not code then return end
   M.ask(file_prefix() .. "Refactor this code to be cleaner and more idiomatic. Show the improved version with a brief explanation:\n\n```\n" .. code .. "\n```", "Refactor")
 end
 
 function M.generate_tests()
-  local code = get_visual_selection()
+  local code = get_selection_or_warn()
+  if not code then return end
   local ft   = vim.bo.filetype
   local hint = ft == "java" and "Use JUnit 5 and Mockito."
             or ft == "typescript" and "Use Jest." or ""
@@ -239,17 +263,20 @@ function M.generate_tests()
 end
 
 function M.fix()
-  local code = get_visual_selection()
+  local code = get_selection_or_warn()
+  if not code then return end
   M.ask(file_prefix() .. "Find and fix bugs in this code. Show the corrected version and explain what was wrong:\n\n```\n" .. code .. "\n```", "Fix")
 end
 
 function M.generate_docs()
-  local code = get_visual_selection()
+  local code = get_selection_or_warn()
+  if not code then return end
   M.ask(file_prefix() .. "Write documentation/docstring for this code:\n\n```\n" .. code .. "\n```", "Generate Docs")
 end
 
 function M.ask_about()
-  local code = get_visual_selection()
+  local code = get_selection_or_warn()
+  if not code then return end
   vim.ui.input({ prompt = "Ask Claude: " }, function(q)
     if q and q ~= "" then
       M.ask(file_prefix() .. q .. "\n\n```\n" .. code .. "\n```", "Claude")

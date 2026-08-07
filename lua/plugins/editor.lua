@@ -104,30 +104,53 @@ return {
     "stevearc/conform.nvim",
     config = function()
       -- Projects with no prettier config of their own (no .prettierrc*, no
-      -- prettier.config.*, no "prettier" key in package.json) don't actually
-      -- use Prettier — running it anyway applies its defaults (e.g. double
-      -- quotes), which can fight a project's own ESLint style rules and undo
-      -- its fix-on-save right after it runs.
-      local function has_prettier_config(_, ctx)
-        return vim.fs.find({
-          ".prettierrc", ".prettierrc.json", ".prettierrc.yml", ".prettierrc.yaml",
-          ".prettierrc.js", ".prettierrc.cjs", ".prettierrc.mjs",
-          "prettier.config.js", "prettier.config.cjs", "prettier.config.mjs",
-        }, { path = ctx.dirname, upward = true })[1] ~= nil
-          or (function()
-            local pkg = vim.fs.find("package.json", { path = ctx.dirname, upward = true })[1]
-            if not pkg then return false end
-            local ok, decoded = pcall(vim.json.decode, table.concat(vim.fn.readfile(pkg), "\n"))
-            return ok and decoded.prettier ~= nil
-          end)()
+      -- prettier.config.*, no "prettier" key in package.json) get a project's
+      -- explicit choice respected exactly (plain prettierd/prettier, no
+      -- overrides) whenever one exists. Only affects JS/TS, where a project's
+      -- own opinion can fight ESLint's style rules; CSS/JSON/YAML/MD keep
+      -- unconditional Prettier since nothing there governs their style.
+      --
+      -- Absent a project opinion, fall back to Google's JS/TS style guide
+      -- (google.github.io/styleguide/{js,ts}guide.html) as this IDE's own
+      -- default rather than Prettier's stock config. In practice this is a
+      -- single real difference: Prettier defaults to double quotes; both
+      -- guides explicitly mandate single quotes. Everything else Prettier
+      -- already does by default — 2-space indent, 80-col wrap, semicolons,
+      -- trailing commas, K&R braces — either matches what's written or the
+      -- guide is silent (the TS guide explicitly doesn't specify indent
+      -- width or a trailing-comma policy). Naming/language-feature rules
+      -- (no var, interfaces over type aliases, etc.) are ESLint's domain,
+      -- not Prettier's — those need Google's own eslint-config-google/gts
+      -- installed per-project; there's no editor-global equivalent the way
+      -- jdtls's formatter profile works for Java.
+      local prettier_config_files = {
+        ".prettierrc", ".prettierrc.json", ".prettierrc.yml", ".prettierrc.yaml",
+        ".prettierrc.json5", ".prettierrc.js", ".prettierrc.cjs", ".prettierrc.mjs",
+        "prettier.config.js", "prettier.config.cjs", "prettier.config.mjs",
+      }
+      local function has_prettier_config(bufnr)
+        local dirname = vim.fs.dirname(vim.api.nvim_buf_get_name(bufnr))
+        if vim.fs.find(prettier_config_files, { path = dirname, upward = true })[1] then
+          return true
+        end
+        local pkg = vim.fs.find("package.json", { path = dirname, upward = true })[1]
+        if not pkg then return false end
+        local ok, decoded = pcall(vim.json.decode, table.concat(vim.fn.readfile(pkg), "\n"))
+        return ok and decoded.prettier ~= nil
+      end
+      local function prettier_or_none(bufnr)
+        if has_prettier_config(bufnr) then
+          return { "prettierd", "prettier", stop_after_first = true }
+        end
+        return { "prettier_google", stop_after_first = true }
       end
 
       require("conform").setup({
         formatters_by_ft = {
-          javascript      = { "prettierd", "prettier", stop_after_first = true },
-          javascriptreact = { "prettierd", "prettier", stop_after_first = true },
-          typescript      = { "prettierd", "prettier", stop_after_first = true },
-          typescriptreact = { "prettierd", "prettier", stop_after_first = true },
+          javascript      = prettier_or_none,
+          javascriptreact = prettier_or_none,
+          typescript      = prettier_or_none,
+          typescriptreact = prettier_or_none,
           json            = { "prettierd", "prettier", stop_after_first = true },
           jsonc           = { "prettierd", "prettier", stop_after_first = true },
           css             = { "prettierd", "prettier", stop_after_first = true },
@@ -150,11 +173,26 @@ return {
               -- Ensure mason's prettierd is found even if not in system PATH
               PATH = vim.fn.stdpath("data") .. "/mason/bin:" .. vim.env.PATH,
             },
-            condition = has_prettier_config,
           },
-          prettier = {
-            condition = has_prettier_config,
-          },
+          -- Plain prettier (not prettierd — the daemon doesn't accept ad-hoc
+          -- CLI overrides) with Google's one confirmed formatting difference
+          -- from Prettier's stock defaults applied explicitly. prepend_args
+          -- only works when overriding an *existing* built-in formatter by
+          -- name (conform.util.merge_formatter_configs) — since this is a
+          -- new name, not a built-in override, args must be wrapped directly.
+          prettier_google = (function()
+            local base = require("conform.formatters.prettier")
+            return vim.tbl_deep_extend("force", base, {
+              args = function(self, ctx)
+                local args = base.args(self, ctx)
+                table.insert(args, "--single-quote")
+                return args
+              end,
+              env = {
+                PATH = vim.fn.stdpath("data") .. "/mason/bin:" .. vim.env.PATH,
+              },
+            })
+          end)(),
         },
       })
     end,
