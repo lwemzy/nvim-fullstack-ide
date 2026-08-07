@@ -48,7 +48,10 @@ return {
     dependencies = { "williamboman/mason.nvim" },
     config = function()
       require("mason-tool-installer").setup({
-        ensure_installed = { "prettierd", "vscode-spring-boot-tools" },
+        -- plain prettier (not just prettierd): the daemon doesn't accept
+        -- ad-hoc CLI overrides, needed for the Google-style fallback in
+        -- plugins/editor.lua's conform.nvim config.
+        ensure_installed = { "prettierd", "prettier", "vscode-spring-boot-tools" },
         run_on_start = true,
       })
     end,

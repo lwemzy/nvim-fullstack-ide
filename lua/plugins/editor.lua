@@ -104,12 +104,25 @@ return {
     "stevearc/conform.nvim",
     config = function()
       -- Projects with no prettier config of their own (no .prettierrc*, no
-      -- prettier.config.*, no "prettier" key in package.json) don't actually
-      -- use Prettier — running it anyway applies its own defaults (e.g.
-      -- double quotes), which can fight a project's ESLint style rules and
-      -- undo its fix-on-save right after it runs. Only affects JS/TS, where
-      -- that ESLint-vs-Prettier conflict actually happens; CSS/JSON/YAML/MD
-      -- keep unconditional Prettier since nothing there governs their style.
+      -- prettier.config.*, no "prettier" key in package.json) get a project's
+      -- explicit choice respected exactly (plain prettierd/prettier, no
+      -- overrides) whenever one exists. Only affects JS/TS, where a project's
+      -- own opinion can fight ESLint's style rules; CSS/JSON/YAML/MD keep
+      -- unconditional Prettier since nothing there governs their style.
+      --
+      -- Absent a project opinion, fall back to Google's JS/TS style guide
+      -- (google.github.io/styleguide/{js,ts}guide.html) as this IDE's own
+      -- default rather than Prettier's stock config. In practice this is a
+      -- single real difference: Prettier defaults to double quotes; both
+      -- guides explicitly mandate single quotes. Everything else Prettier
+      -- already does by default — 2-space indent, 80-col wrap, semicolons,
+      -- trailing commas, K&R braces — either matches what's written or the
+      -- guide is silent (the TS guide explicitly doesn't specify indent
+      -- width or a trailing-comma policy). Naming/language-feature rules
+      -- (no var, interfaces over type aliases, etc.) are ESLint's domain,
+      -- not Prettier's — those need Google's own eslint-config-google/gts
+      -- installed per-project; there's no editor-global equivalent the way
+      -- jdtls's formatter profile works for Java.
       local prettier_config_files = {
         ".prettierrc", ".prettierrc.json", ".prettierrc.yml", ".prettierrc.yaml",
         ".prettierrc.json5", ".prettierrc.js", ".prettierrc.cjs", ".prettierrc.mjs",
@@ -129,7 +142,7 @@ return {
         if has_prettier_config(bufnr) then
           return { "prettierd", "prettier", stop_after_first = true }
         end
-        return {}
+        return { "prettier_google", stop_after_first = true }
       end
 
       require("conform").setup({
@@ -161,6 +174,25 @@ return {
               PATH = vim.fn.stdpath("data") .. "/mason/bin:" .. vim.env.PATH,
             },
           },
+          -- Plain prettier (not prettierd — the daemon doesn't accept ad-hoc
+          -- CLI overrides) with Google's one confirmed formatting difference
+          -- from Prettier's stock defaults applied explicitly. prepend_args
+          -- only works when overriding an *existing* built-in formatter by
+          -- name (conform.util.merge_formatter_configs) — since this is a
+          -- new name, not a built-in override, args must be wrapped directly.
+          prettier_google = (function()
+            local base = require("conform.formatters.prettier")
+            return vim.tbl_deep_extend("force", base, {
+              args = function(self, ctx)
+                local args = base.args(self, ctx)
+                table.insert(args, "--single-quote")
+                return args
+              end,
+              env = {
+                PATH = vim.fn.stdpath("data") .. "/mason/bin:" .. vim.env.PATH,
+              },
+            })
+          end)(),
         },
       })
     end,
