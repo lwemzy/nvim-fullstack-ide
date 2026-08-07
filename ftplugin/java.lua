@@ -111,6 +111,8 @@ local config = {
     map("gi", "<cmd>Telescope lsp_implementations<CR>", "Find implementations")
     map("<leader>ds", "<cmd>Telescope lsp_document_symbols<CR>", "Document symbols")
     map("<leader>ws", "<cmd>Telescope lsp_dynamic_workspace_symbols<CR>", "Workspace symbols")
+    map("<leader>lc", vim.lsp.buf.incoming_calls, "Incoming calls (callers)")
+    map("<leader>lC", vim.lsp.buf.outgoing_calls, "Outgoing calls (callees)")
     map("K", vim.lsp.buf.hover, "Hover docs")
     map("<C-k>", vim.lsp.buf.signature_help, "Signature help")
     map("<leader>rn", vim.lsp.buf.rename, "Rename symbol")

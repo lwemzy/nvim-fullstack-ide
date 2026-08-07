@@ -103,12 +103,41 @@ return {
   {
     "stevearc/conform.nvim",
     config = function()
+      -- Projects with no prettier config of their own (no .prettierrc*, no
+      -- prettier.config.*, no "prettier" key in package.json) don't actually
+      -- use Prettier — running it anyway applies its own defaults (e.g.
+      -- double quotes), which can fight a project's ESLint style rules and
+      -- undo its fix-on-save right after it runs. Only affects JS/TS, where
+      -- that ESLint-vs-Prettier conflict actually happens; CSS/JSON/YAML/MD
+      -- keep unconditional Prettier since nothing there governs their style.
+      local prettier_config_files = {
+        ".prettierrc", ".prettierrc.json", ".prettierrc.yml", ".prettierrc.yaml",
+        ".prettierrc.json5", ".prettierrc.js", ".prettierrc.cjs", ".prettierrc.mjs",
+        "prettier.config.js", "prettier.config.cjs", "prettier.config.mjs",
+      }
+      local function has_prettier_config(bufnr)
+        local dirname = vim.fs.dirname(vim.api.nvim_buf_get_name(bufnr))
+        if vim.fs.find(prettier_config_files, { path = dirname, upward = true })[1] then
+          return true
+        end
+        local pkg = vim.fs.find("package.json", { path = dirname, upward = true })[1]
+        if not pkg then return false end
+        local ok, decoded = pcall(vim.json.decode, table.concat(vim.fn.readfile(pkg), "\n"))
+        return ok and decoded.prettier ~= nil
+      end
+      local function prettier_or_none(bufnr)
+        if has_prettier_config(bufnr) then
+          return { "prettierd", "prettier", stop_after_first = true }
+        end
+        return {}
+      end
+
       require("conform").setup({
         formatters_by_ft = {
-          javascript      = { "prettierd", "prettier", stop_after_first = true },
-          javascriptreact = { "prettierd", "prettier", stop_after_first = true },
-          typescript      = { "prettierd", "prettier", stop_after_first = true },
-          typescriptreact = { "prettierd", "prettier", stop_after_first = true },
+          javascript      = prettier_or_none,
+          javascriptreact = prettier_or_none,
+          typescript      = prettier_or_none,
+          typescriptreact = prettier_or_none,
           json            = { "prettierd", "prettier", stop_after_first = true },
           jsonc           = { "prettierd", "prettier", stop_after_first = true },
           css             = { "prettierd", "prettier", stop_after_first = true },
