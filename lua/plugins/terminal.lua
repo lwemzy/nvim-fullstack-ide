@@ -63,6 +63,7 @@ return {
         end)
       end
       vim.keymap.set("n", "<M-r>", run_cmd_prompt, { desc = "Run command in terminal" })
+      vim.keymap.set("n", "<D-r>", run_cmd_prompt, { desc = "Run command in terminal (macOS)" })
     end,
   },
 }

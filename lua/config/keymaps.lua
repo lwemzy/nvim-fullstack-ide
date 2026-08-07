@@ -22,6 +22,7 @@ map("n", "<C-Right>", ":vertical resize +2<CR>", { silent = true })
 -- overrides: C-e (scroll 1 line) — use C-d/C-u for scrolling instead
 map("n", "<C-e>", ":NvimTreeToggle<CR>",   { silent = true, desc = "Toggle explorer" })
 map("n", "<C-S-e>", ":NvimTreeFindFile<CR>", { silent = true, desc = "Reveal file in explorer" })
+map("n", "<D-b>", ":NvimTreeToggle<CR>",   { silent = true, desc = "Toggle explorer (macOS)" })
 
 -- ── Telescope / Search ─────────────────────────────────────────────────────
 -- C-p = find files  (like VS Code)       overrides: prev completion (Tab still works)
@@ -32,9 +33,11 @@ map("n", "<C-p>", "<cmd>Telescope find_files<CR>",  { desc = "Find files" })
 map("n", "<C-s-f>", function() require("telescope.builtin").live_grep() end, { desc = "Live grep (search in files)" })
 map("n", "<C-b>", "<cmd>Telescope buffers<CR>", { desc = "Switch buffer" })
 map("n", "<C-t>", "<cmd>Telescope oldfiles<CR>",    { desc = "Recent files" })
+map("n", "<D-p>", "<cmd>Telescope find_files<CR>",  { desc = "Find files (macOS)" })
 
 -- ── Save / Quit ────────────────────────────────────────────────────────────
 map({ "n", "i" }, "<C-s>", "<Esc>:w<CR>",  { silent = true, desc = "Save file" })
+map({ "n", "i" }, "<D-s>", "<Esc>:w<CR>",  { silent = true, desc = "Save file (macOS)" })
 -- C-q: overrides visual-block-2 (C-v still works for that)
 map("n", "<C-q>", ":qa<CR>", { silent = true, desc = "Quit all" })
 
@@ -151,6 +154,8 @@ map("n", "<C-_>", comment_line,    { desc = "Toggle comment" })
 map("v", "<C-_>", comment_visual,  { desc = "Toggle comment" })
 map("n", "<C-/>", comment_line,    { desc = "Toggle comment" })
 map("v", "<C-/>", comment_visual,  { desc = "Toggle comment" })
+map("n", "<D-/>", comment_line,    { desc = "Toggle comment (macOS)" })
+map("v", "<D-/>", comment_visual,  { desc = "Toggle comment (macOS)" })
 
 -- Clear search highlight
 map("n", "<Esc>", ":nohlsearch<CR>", { silent = true })
