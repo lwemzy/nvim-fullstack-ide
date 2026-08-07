@@ -51,14 +51,16 @@ end, { desc = "Format file" })
 
 -- ── LSP actions ───────────────────────────────────────────────────────────
 map("n", "<F2>",  vim.lsp.buf.rename,                   { desc = "Rename symbol" })
-map("n", "<F4>", function()
+local function code_action()
   local clients = vim.lsp.get_clients({ bufnr = 0 })
   if #clients == 0 then
     vim.notify("No LSP attached to this buffer", vim.log.levels.WARN)
     return
   end
   vim.lsp.buf.code_action()
-end, { desc = "Code action" })
+end
+map("n", "<F4>", code_action, { desc = "Code action" })
+map("n", "<C-.>", code_action, { desc = "Code action (VS Code-style quick fix)" })
 map("n", "<F12>", "<cmd>Telescope lsp_definitions<CR>", { desc = "Go to definition" })
 
 -- ── Diagnostics ────────────────────────────────────────────────────────────
