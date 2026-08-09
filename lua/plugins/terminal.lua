@@ -8,7 +8,6 @@ return {
           elseif term.direction == "vertical" then return math.floor(vim.o.columns * 0.4)
           end
         end,
-        open_mapping  = [[<C-\>]],
         direction     = "horizontal",
         close_on_exit = true,
         shell         = vim.o.shell,
@@ -16,6 +15,28 @@ return {
       })
 
       local Terminal = require("toggleterm.terminal").Terminal
+
+      -- ── Main terminal: opens/cd's to the current file's directory ──────
+      -- Hidden (not close_on_exit-managed away) so the shell process and
+      -- its history/state persist across toggles — only the window hides.
+      local main_term = Terminal:new({ hidden = true, direction = "horizontal" })
+
+      local function toggle_main_term()
+        if vim.bo.buftype ~= "terminal" then
+          local dir = vim.fn.expand("%:p:h")
+          if dir ~= "" and vim.fn.isdirectory(dir) == 1 then
+            if main_term.job_id then
+              -- Already running: actually `cd` the live shell.
+              main_term:change_dir(dir)
+            else
+              -- Not spawned yet: this becomes termopen()'s initial cwd.
+              main_term.dir = dir
+            end
+          end
+        end
+        main_term:toggle()
+      end
+      vim.keymap.set({ "n", "t" }, "<C-\\>", toggle_main_term, { desc = "Toggle terminal (cwd = current file's directory)" })
 
       -- ── LazyGit ──────────────────────────────────────────────────────
       local lazygit = Terminal:new({
