@@ -85,6 +85,10 @@ return {
         },
         filters = { dotfiles = false, custom = { "^.git$" } },
         git = { enable = true, ignore = false },
+        -- Auto-reveal the current file's path in the tree on every buffer
+        -- switch. Expands what's needed to show it, doesn't force-collapse
+        -- other folders you have open — same as Ctrl+Shift+e's manual reveal.
+        update_focused_file = { enable = true },
         actions = {
           open_file = {
             quit_on_open = false,
