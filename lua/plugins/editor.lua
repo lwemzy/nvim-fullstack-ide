@@ -69,6 +69,15 @@ return {
           changedelete = { text = "▎" },
           untracked = { text = "▎" },
         },
+        -- Inline blame as virtual text once the cursor sits still on a line
+        -- for a bit — leader+gb (blame_line below) stays as the on-demand
+        -- popup with the full commit body, this is just the passive at-a-
+        -- glance version.
+        current_line_blame = true,
+        current_line_blame_opts = {
+          delay = 500,
+        },
+        current_line_blame_formatter = "   <author>, <author_time:%R>",
         on_attach = function(bufnr)
           local gs = package.loaded.gitsigns
           local map = function(mode, l, r, desc)
