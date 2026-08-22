@@ -68,6 +68,11 @@ map("n", "]d",   vim.diagnostic.goto_next,              { desc = "Next diagnosti
 map("n", "[d",   vim.diagnostic.goto_prev,              { desc = "Prev diagnostic" })
 map("n", "<M-e>", vim.diagnostic.open_float,            { desc = "Show diagnostic detail" })
 map("n", "<M-x>", "<cmd>Trouble diagnostics toggle<CR>",{ desc = "Diagnostics list" })
+-- More Trouble modes on the existing plugin (only diagnostics had a keymap)
+map("n", "<leader>xs", "<cmd>Trouble symbols toggle<CR>",  { desc = "Symbols (Trouble)" })
+map("n", "<leader>xr", "<cmd>Trouble lsp toggle<CR>",      { desc = "LSP refs/defs (Trouble)" })
+map("n", "<leader>xt", "<cmd>Trouble todo toggle<CR>",     { desc = "TODOs (Trouble)" })
+map("n", "<leader>xq", "<cmd>Trouble qflist toggle<CR>",   { desc = "Quickfix (Trouble)" })
 
 -- ── Debug (F5-F11) ─────────────────────────────────────────────────────────
 -- Adapters configured in plugins/debug.lua
@@ -166,6 +171,8 @@ map("n", "<Esc>", ":nohlsearch<CR>", { silent = true })
 map("n", "<F1>", "<cmd>LspLog<CR>", { desc = "Open LSP log" })
 -- Notification history: browse past notifications in Telescope
 map("n", "<C-S-n>", "<cmd>Telescope notify<CR>", { desc = "Notification history" })
+-- Database UI (vim-dadbod-ui) — capital D avoids the <leader>d diagnostic-float bind
+map("n", "<leader>D", "<cmd>DBUIToggle<CR>", { desc = "Database UI" })
 -- Neovim runtime log
 map("n", "<C-S-l>", function()
   vim.cmd("edit " .. vim.fn.stdpath("log") .. "/nvim.log")

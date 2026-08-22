@@ -51,7 +51,7 @@ return {
         -- plain prettier (not just prettierd): the daemon doesn't accept
         -- ad-hoc CLI overrides, needed for the Google-style fallback in
         -- plugins/editor.lua's conform.nvim config.
-        ensure_installed = { "prettierd", "prettier", "vscode-spring-boot-tools" },
+        ensure_installed = { "prettierd", "prettier", "vscode-spring-boot-tools", "stylelint" },
         run_on_start = true,
       })
     end,
@@ -59,6 +59,54 @@ return {
 
   -- Schema store for JSON / YAML validation
   { "b0o/schemastore.nvim" },
+
+  -- Standalone linter runner — fills the one real gap left by the LSPs
+  -- above: eslint covers JS/TS style rules, but cssls only validates CSS
+  -- syntax, not style. stylelint (via Mason, see ensure_installed above)
+  -- covers CSS/SCSS/LESS the same way eslint covers JS/TS.
+  {
+    "mfussenegger/nvim-lint",
+    event = { "BufWritePost", "BufReadPost", "InsertLeave" },
+    config = function()
+      require("lint").linters_by_ft = {
+        css  = { "stylelint" },
+        scss = { "stylelint" },
+        less = { "stylelint" },
+      }
+
+      -- Without a project stylelint config, stylelint itself throws
+      -- ConfigurationError ("No configuration provided") instead of just
+      -- no-opping — unlike eslint's LSP, which silently attaches nothing.
+      -- Left unguarded that shows up as a permanent fake "lint error" on
+      -- every CSS/SCSS/LESS buffer in projects that never opted into
+      -- stylelint. Mirrors has_prettier_config's project-opt-in check
+      -- in plugins/editor.lua: only lint where a project asked for it.
+      local stylelint_config_files = {
+        ".stylelintrc", ".stylelintrc.json", ".stylelintrc.yaml", ".stylelintrc.yml",
+        ".stylelintrc.js", ".stylelintrc.cjs", ".stylelintrc.mjs",
+        "stylelint.config.js", "stylelint.config.cjs", "stylelint.config.mjs",
+      }
+      local function has_stylelint_config(bufnr)
+        local dirname = vim.fs.dirname(vim.api.nvim_buf_get_name(bufnr))
+        if vim.fs.find(stylelint_config_files, { path = dirname, upward = true })[1] then
+          return true
+        end
+        local pkg = vim.fs.find("package.json", { path = dirname, upward = true })[1]
+        if not pkg then return false end
+        local ok, decoded = pcall(vim.json.decode, table.concat(vim.fn.readfile(pkg), "\n"))
+        return ok and decoded.stylelint ~= nil
+      end
+
+      vim.api.nvim_create_autocmd({ "BufWritePost", "BufReadPost", "InsertLeave" }, {
+        group = vim.api.nvim_create_augroup("nvim_lint", { clear = true }),
+        callback = function(ev)
+          if has_stylelint_config(ev.buf) then
+            require("lint").try_lint()
+          end
+        end,
+      })
+    end,
+  },
 
   -- nvim-lspconfig: kept only for its runtime/lsp/ server definitions.
   -- We do NOT call require('lspconfig').X.setup() — that API is deprecated in
@@ -356,6 +404,15 @@ return {
             show_labelDetails = true,
           }),
         },
+      })
+
+      -- SQL buffers (opened via vim-dadbod-ui below): bean/table/column
+      -- completion from the active DB connection, ahead of plain buffer words.
+      cmp.setup.filetype({ "sql", "mysql", "plsql" }, {
+        sources = cmp.config.sources({
+          { name = "vim-dadbod-completion", priority = 1000 },
+          { name = "buffer", priority = 500 },
+        }),
       })
 
       cmp.setup.cmdline({ "/", "?" }, {

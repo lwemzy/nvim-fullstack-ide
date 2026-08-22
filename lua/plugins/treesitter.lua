@@ -13,6 +13,10 @@ return {
         "json", "yaml", "toml",
         "html", "css", "scss", "markdown", "markdown_inline",
         "bash", "xml", "regex", "angular",
+        -- build.gradle (groovy) / build.gradle.kts (kotlin) syntax highlighting
+        "groovy", "kotlin",
+        "dockerfile",
+        "sql",
       }
       -- main-branch nvim-treesitter dropped the old `ensure_installed` /
       -- `auto_install` setup() options (setup() only takes `install_dir`
@@ -65,6 +69,50 @@ return {
     "nvim-treesitter/nvim-treesitter-context",
     event = { "BufReadPost", "BufNewFile" },
     opts = { max_lines = 3 },
+  },
+
+  -- Semantic text objects/motions (function/class/argument) from the same
+  -- Treesitter parsers already installed above — af/if, ac/ic, aa/ia to
+  -- select, ]m/[m (+ ]M/[M) and ]c/[c to jump between function/class starts.
+  {
+    "nvim-treesitter/nvim-treesitter-textobjects",
+    branch = "main",
+    dependencies = { "nvim-treesitter/nvim-treesitter" },
+    event = { "BufReadPost", "BufNewFile" },
+    config = function()
+      require("nvim-treesitter-textobjects").setup({
+        select = {
+          lookahead = true,
+          selection_modes = {
+            ["@parameter.outer"] = "v",
+            ["@function.outer"] = "V",
+            ["@class.outer"] = "V",
+          },
+        },
+        move = { set_jumps = true },
+      })
+
+      local select = require("nvim-treesitter-textobjects.select")
+      local move = require("nvim-treesitter-textobjects.move")
+
+      local function selector(query)
+        return function() select.select_textobject(query, "textobjects") end
+      end
+
+      vim.keymap.set({ "x", "o" }, "af", selector("@function.outer"),  { desc = "Select: function (outer)" })
+      vim.keymap.set({ "x", "o" }, "if", selector("@function.inner"),  { desc = "Select: function (inner)" })
+      vim.keymap.set({ "x", "o" }, "ac", selector("@class.outer"),     { desc = "Select: class (outer)" })
+      vim.keymap.set({ "x", "o" }, "ic", selector("@class.inner"),     { desc = "Select: class (inner)" })
+      vim.keymap.set({ "x", "o" }, "aa", selector("@parameter.outer"), { desc = "Select: argument (outer)" })
+      vim.keymap.set({ "x", "o" }, "ia", selector("@parameter.inner"), { desc = "Select: argument (inner)" })
+
+      vim.keymap.set({ "n", "x", "o" }, "]m", function() move.goto_next_start("@function.outer", "textobjects") end,     { desc = "Next function start" })
+      vim.keymap.set({ "n", "x", "o" }, "]M", function() move.goto_next_end("@function.outer", "textobjects") end,       { desc = "Next function end" })
+      vim.keymap.set({ "n", "x", "o" }, "[m", function() move.goto_previous_start("@function.outer", "textobjects") end, { desc = "Prev function start" })
+      vim.keymap.set({ "n", "x", "o" }, "[M", function() move.goto_previous_end("@function.outer", "textobjects") end,   { desc = "Prev function end" })
+      vim.keymap.set({ "n", "x", "o" }, "]c", function() move.goto_next_start("@class.outer", "textobjects") end,       { desc = "Next class start" })
+      vim.keymap.set({ "n", "x", "o" }, "[c", function() move.goto_previous_start("@class.outer", "textobjects") end,   { desc = "Prev class start" })
+    end,
   },
 
   -- Auto-close and auto-rename HTML / JSX / TSX tags

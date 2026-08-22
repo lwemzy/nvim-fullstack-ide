@@ -163,4 +163,39 @@ return {
       { "<leader>uqd", function() require("persistence").stop() end,                           desc = "Don't save session" },
     },
   },
+
+  -- ── package.json: inline current/latest version + update-in-place ────────
+  {
+    "vuki656/package-info.nvim",
+    dependencies = "MunifTanjim/nui.nvim",
+    ft = "json",
+    opts = {
+      icons = { enable = true, style = { up_to_date = "✓ ", outdated = "  " } },
+    },
+    keys = {
+      { "<leader>ps", function() require("package-info").show() end,           ft = "json", desc = "Package info: Show versions" },
+      { "<leader>pu", function() require("package-info").update() end,         ft = "json", desc = "Package info: Update dependency" },
+      { "<leader>pd", function() require("package-info").delete() end,         ft = "json", desc = "Package info: Delete dependency" },
+      { "<leader>pc", function() require("package-info").change_version() end, ft = "json", desc = "Package info: Change version" },
+    },
+  },
+
+  -- ── Database client: query Postgres/MySQL/etc. from a scratch buffer ─────
+  { "tpope/vim-dadbod", cmd = { "DB", "DBUI" } },
+  {
+    "kristijanhusak/vim-dadbod-ui",
+    dependencies = { "tpope/vim-dadbod" },
+    cmd = { "DBUI", "DBUIToggle", "DBUIAddConnection", "DBUIFindBuffer" },
+    init = function()
+      vim.g.db_ui_use_nerd_fonts = 1
+      vim.g.db_ui_save_location = vim.fn.stdpath("data") .. "/db_ui_queries"
+    end,
+  },
+  -- Registers itself as an nvim-cmp source for sql/mysql/plsql buffers
+  -- (wired into cmp.setup.filetype in plugins/lsp.lua).
+  {
+    "kristijanhusak/vim-dadbod-completion",
+    ft = { "sql", "mysql", "plsql" },
+    dependencies = { "hrsh7th/nvim-cmp" },
+  },
 }

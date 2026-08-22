@@ -177,6 +177,7 @@ return {
         { "<leader>g", group = "git" },
         { "<leader>j", group = "java" },
         { "<leader>l", group = "lsp" },
+        { "<leader>p", group = "package" },
         { "<leader>s", group = "split" },
         { "<leader>u", group = "ui toggles" },
         { "<leader>uq", group = "session" },

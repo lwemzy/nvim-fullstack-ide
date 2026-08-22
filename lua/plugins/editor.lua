@@ -27,6 +27,17 @@ return {
     end,
   },
 
+  -- Gutter sign that lights up when a code action is available at the
+  -- cursor — tells you when Ctrl+./F4 is worth pressing instead of guessing.
+  {
+    "kosayoda/nvim-lightbulb",
+    event = "LspAttach",
+    opts = {
+      autocmd = { enabled = true },
+      sign = { enabled = true, text = "💡" },
+    },
+  },
+
   -- Auto bracket/quote pairs
   {
     "windwp/nvim-autopairs",
