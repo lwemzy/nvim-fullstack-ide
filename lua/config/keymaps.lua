@@ -45,9 +45,39 @@ map("n", "<C-q>", ":qa<CR>", { silent = true, desc = "Quit all" })
 -- ── Format ─────────────────────────────────────────────────────────────────
 -- Format-on-save handles this automatically (configured in editor.lua).
 -- C-\ is reserved for toggleterm. Manual format via Alt+L (like IntelliJ Ctrl+Alt+L).
-map("n", "<M-l>", function()
-  require("conform").format({ async = true, lsp_fallback = true })
-end, { desc = "Format file" })
+local function format_file()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local conform = require("conform")
+
+  local function lsp_can_format()
+    return #vim.lsp.get_clients({ bufnr = bufnr, method = "textDocument/formatting" }) > 0
+  end
+
+  -- Filetypes with no static conform formatter (e.g. Java, entirely reliant
+  -- on jdtls via lsp_fallback) fail outright if the LSP hasn't attached yet
+  -- — jdtls alone can take several seconds to attach on a cold Gradle/Maven
+  -- import. Poll briefly instead of surfacing Neovim's generic "no matching
+  -- language servers" error on every format-right-after-opening attempt.
+  if #conform.list_formatters(bufnr) > 0 or lsp_can_format() then
+    conform.format({ async = true, lsp_fallback = true })
+    return
+  end
+
+  vim.notify("Waiting for a language server to attach before formatting…", vim.log.levels.INFO)
+  local attempts = 0
+  local function poll()
+    attempts = attempts + 1
+    if lsp_can_format() then
+      conform.format({ async = true, lsp_fallback = true })
+    elseif attempts >= 20 then -- ~10s
+      vim.notify("No formatter available for this file", vim.log.levels.WARN)
+    else
+      vim.defer_fn(poll, 500)
+    end
+  end
+  poll()
+end
+map("n", "<M-l>", format_file, { desc = "Format file" })
 
 -- ── LSP actions ───────────────────────────────────────────────────────────
 map("n", "<F2>",  vim.lsp.buf.rename,                   { desc = "Rename symbol" })

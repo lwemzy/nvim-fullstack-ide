@@ -16,6 +16,17 @@ local capabilities = cmp_ok
   and cmp_lsp.default_capabilities()
   or vim.lsp.protocol.make_client_capabilities()
 
+-- Without this, settings.java.configuration.updateBuildConfiguration =
+-- "automatic" (below) is a no-op: jdtls re-syncs the Gradle/Maven project
+-- model by registering a workspace/didChangeWatchedFiles watch on build.gradle
+-- /pom.xml, but Neovim's LSP client only honors that registration when the
+-- client advertises dynamicRegistration = true for it — false by default
+-- (see :h vim.lsp._watchfiles, which gates on exactly this capability). Left
+-- unset, new dependencies silently never get picked up until :JdtUpdateConfig
+-- (<leader>ju) is run by hand.
+capabilities.workspace = capabilities.workspace or {}
+capabilities.workspace.didChangeWatchedFiles = { dynamicRegistration = true }
+
 local lombok_jar = vim.fn.stdpath("data") .. "/lombok.jar"
 local lombok_arg = vim.fn.filereadable(lombok_jar) == 1
   and "--jvm-arg=-javaagent:" .. lombok_jar
@@ -132,6 +143,13 @@ local config = {
     map("<C-S-v>", jdtls.extract_variable,      "Extract variable")
     map("<C-S-c>", jdtls.extract_constant,      "Extract constant")
 
+    -- Re-syncs jdtls's Gradle/Maven project model (new deps, source dirs).
+    -- updateBuildConfiguration="automatic" (below) relies on jdtls's own file
+    -- watcher on build.gradle/pom.xml, which doesn't always fire promptly from
+    -- Neovim's LSP client — run this manually after adding a dependency if
+    -- new classes aren't resolving/importing yet.
+    map("<leader>ju", function() jdtls.update_projects_config() end, "Java: Update project config (resync build)")
+
     -- Debug keymaps (F9/F10/F11 are taken by Java tools above)
     map("<leader>db", function() require("dap").toggle_breakpoint() end, "Debug: Toggle breakpoint")
     map("<leader>dB", function()
@@ -173,13 +191,11 @@ local config = {
       end)
     end, "Run without debugging")
 
-    -- Format on save
-    vim.api.nvim_create_autocmd("BufWritePre", {
-      buffer = bufnr,
-      callback = function()
-        vim.lsp.buf.format({ async = false, id = client.id })
-      end,
-    })
+    -- No format-on-save: vim.lsp.buf.format()'s synchronous path applies
+    -- whatever edits jdtls returns with zero staleness check (confirmed in
+    -- Neovim's own runtime/lua/vim/lsp/buf.lua — unlike conform.nvim, which
+    -- verifiably discards a stale result) and was observed dropping real
+    -- content on save. Format explicitly via <M-l> (keymaps.lua) instead.
 
     -- Code lenses (implementations/references counts, java-test's Run/Debug Test
     -- lenses). Bypasses vim.lsp.codelens's built-in renderer, which draws every

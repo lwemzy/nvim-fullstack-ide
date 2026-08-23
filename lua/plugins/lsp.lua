@@ -274,19 +274,16 @@ return {
         settings = {
           yaml = {
             schemaStore = { enable = false, url = "" },
+            -- SchemaStore removed the spring-boot-application schema from its
+            -- catalog (the URL now 404s, producing a permanent "Unable to
+            -- load schema" error). Real application.yml intellisense comes
+            -- from spring-boot.nvim/boot-ls (plugins/java.lua), which attaches
+            -- to these buffers directly in Spring Boot projects — no static
+            -- JSON schema substitute needed here.
             schemas = vim.tbl_extend("force",
               ss_ok and schemastore.yaml.schemas() or {},
               {
-                -- Spring Boot application.yml / application-{profile}.yml
                 ["https://www.schemastore.org/api/json/catalog.json"] = false,
-                ["http://json.schemastore.org/spring-boot-application"] = {
-                  "application.yml",
-                  "application.yaml",
-                  "application-*.yml",
-                  "application-*.yaml",
-                  "bootstrap.yml",
-                  "bootstrap-*.yml",
-                },
               }
             ),
             validate = true,

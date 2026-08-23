@@ -180,7 +180,17 @@ return {
           yaml            = { "prettierd", "prettier", stop_after_first = true },
           markdown        = { "prettierd", "prettier", stop_after_first = true },
         },
-        -- format_after_save runs async so it never blocks editing
+        -- format_after_save (async) is the *safe* auto-format path: confirmed
+        -- in conform's own source (lua/conform/lsp_format.lua) that it checks
+        -- the buffer's changedtick before applying an LSP-formatter's result
+        -- and discards it on any mismatch, for every filetype (its autocmd is
+        -- unscoped — pattern = "*", not filtered by formatters_by_ft) — so
+        -- this also covers Java via lsp_fallback below, going through jdtls
+        -- the safe way. This replaces jdtls's own BufWritePre formatting
+        -- (ftplugin/java.lua), which called Neovim's synchronous
+        -- vim.lsp.buf.format() directly — confirmed in Neovim's own runtime
+        -- (lua/vim/lsp/buf.lua) to apply results with NO staleness check —
+        -- and was observed dropping real content on save.
         format_after_save = function(bufnr)
           return {
             timeout_ms   = 5000,
