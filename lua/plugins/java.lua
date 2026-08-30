@@ -63,24 +63,38 @@ return {
           -- .java files via a separate classpath/java-data service it
           -- registers unconditionally (launch.lua's update_ls_config calls
           -- classpath.register_classpath_service/java_data.register_java_
-          -- data_service regardless of filetypes). Its Spring Security
+          -- data_service regardless of filetypes — load-bearing, not
+          -- optional: it's what feeds jdtls's classpath into boot-ls's
+          -- project-wide Spring index, the thing that makes application.yml
+          -- property completion actually accurate against real
+          -- @ConfigurationProperties classes). Its Spring Security
           -- lambda-DSL reconciler throws a real NullPointerException
           -- ("AbstractSecurityLambdaDslReconciler", MethodInvocation with a
           -- null getExpression()) repeatedly while walking real project
-          -- code. Key/values read directly from the language server's own
-          -- VSCode extension package.json (mason/packages/vscode-spring-
-          -- boot-tools/extension/package.json) — settings are LSP
-          -- workspace/configuration, resolved by Neovim's default handler
-          -- via nested-table lookup matching each dot-separated segment, so
-          -- the VSCode dotted key becomes this nested shape.
+          -- code — confirmed still crash-looping identically after trying
+          -- to suppress just that one problem category via severity
+          -- (spring-boot.ls.problem.boot2.HTTP_SECURITY_AUTHORIZE_HTTP_
+          -- REQUESTS = "IGNORE"): the NPE happens inside the AST-walk
+          -- itself, before boot-ls ever reaches the point of checking a
+          -- problem's configured severity, so no severity setting can stop
+          -- it. This instead disables the whole reconcile-engine subsystem
+          -- (BootJavaReconcileEngine, confirmed via its stack trace as the
+          -- caller of the crashing reconciler) via boot-ls's documented
+          -- master switch. Separate subsystem from SpringSymbolIndex/
+          -- SpringIndexerJava (confirmed via a distinct stack trace through
+          -- getDocumentSymbolsFromMetamodelIndex) — the project-wide index
+          -- that actually backs application.yml completion — so that stays
+          -- intact. Trade-off: every other Java-side Spring diagnostic
+          -- (missing @Configuration, autowiring hints, etc.) goes with it,
+          -- not just the broken one. Key read from the language server's
+          -- own VSCode extension package.json (mason/packages/vscode-
+          -- spring-boot-tools/extension/package.json); nesting matches how
+          -- Neovim's workspace/configuration handler resolves a dotted
+          -- section via nested-table lookup.
           settings = {
-            ["spring-boot"] = {
-              ls = {
-                problem = {
-                  boot2 = {
-                    HTTP_SECURITY_AUTHORIZE_HTTP_REQUESTS = "IGNORE",
-                  },
-                },
+            ["boot-java"] = {
+              java = {
+                reconcilers = false,
               },
             },
           },
