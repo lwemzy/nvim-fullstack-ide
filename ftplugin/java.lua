@@ -51,6 +51,14 @@ local config = {
     ".git", "mvnw", "gradlew", "pom.xml", "build.gradle", "build.gradle.kts",
   }) or vim.fn.getcwd(),
 
+  -- Neovim's default (150ms) is tuned for lightweight servers. jdtls
+  -- re-validates/re-publishes diagnostics on every batch of changes it's
+  -- sent (visible in fidget as constant "Publish Diagnostics"/"Validate
+  -- documents" activity), and that work competes with completion requests
+  -- on the same process — widening this reduces how often jdtls gets
+  -- interrupted to re-validate while you're actively typing.
+  flags = { debounce_text_changes = 500 },
+
   capabilities = capabilities,
 
   settings = {
@@ -77,14 +85,21 @@ local config = {
       inlayHints = { parameterNames = { enabled = "all" } },
       -- Enable annotation processing so MapStruct/Lombok processors run in jdtls's JDT compiler
       autobuild = { enabled = true },
+      -- NOT the primary Java formatter anymore — that's palantir-java-format
+      -- now (plugins/editor.lua's formatters_by_ft), chosen because Eclipse's
+      -- own alignment/wrapping algorithm staircases fluent method chains
+      -- (assertions, builders) no XML setting here can fix. This block stays
+      -- purely as conform's lsp_fallback safety net for if that binary is
+      -- ever unavailable — still real, still in use, just no longer the
+      -- primary path. Google Java Style Guide profile kept as-is for that
+      -- fallback (https://google.github.io/styleguide/javaguide.html), via
+      -- Google's own official Eclipse formatter profile. Without a url set
+      -- here, jdtls silently falls back to Eclipse's own default profile —
+      -- which is NOT Google style (different import layout, no enforced
+      -- 100-col wrap, etc.) — despite what this comment used to claim.
       format = {
         enabled = true,
         settings = {
-          -- Google Java Style Guide (https://google.github.io/styleguide/javaguide.html),
-          -- via Google's own official Eclipse formatter profile. Without a url set
-          -- here, jdtls silently falls back to Eclipse's own default profile —
-          -- which is NOT Google style (different import layout, no enforced
-          -- 100-col wrap, etc.) — despite what this comment used to claim.
           url = vim.fn.stdpath("config") .. "/java-google-style.xml",
           profile = "GoogleStyle",
         },
@@ -113,6 +128,17 @@ local config = {
   },
 
   on_attach = function(client, bufnr)
+    -- Semantic tokens are redundant for Java: treesitter already unconditionally
+    -- highlights every buffer with a parser (config/autocmds.lua's
+    -- treesitter_highlight autocmd). Neovim's built-in semantic-token
+    -- highlighter re-requests tokens on its own ~200ms cadence tied to every
+    -- client notification and cancels/reissues in-flight requests — confirmed
+    -- as the dominant source of the -32801 "Document changed, request
+    -- invalid" errors (and a share of the unmatched-cancel warnings) in
+    -- lsp.log. This is Neovim's documented opt-out (see the docstring on
+    -- vim.lsp.semantic_tokens.start, which names this exact capability strip).
+    client.server_capabilities.semanticTokensProvider = nil
+
     jdtls.setup.add_commands()
 
     local map = function(keys, func, desc)
@@ -139,7 +165,6 @@ local config = {
     map("<F9>",  jdtls.organize_imports,        "Organize imports")
     map("<F10>", jdtls.test_nearest_method,     "Run nearest test")
     map("<F11>", jdtls.test_class,              "Run all tests in class")
-    map("<C-S-o>", jdtls.organize_imports,      "Organize imports")
     map("<C-S-v>", jdtls.extract_variable,      "Extract variable")
     map("<C-S-c>", jdtls.extract_constant,      "Extract constant")
 
@@ -330,6 +355,11 @@ local config = {
       -- spring-boot.nvim (Spring Boot Language Server <-> jdtls classpath sync).
       -- require() here force-loads the lazy plugin synchronously instead of
       -- relying on FileType-autocmd ordering between lazy.nvim and ftplugin.
+      -- Independent of whether boot-ls's own client attaches to .java (it
+      -- doesn't — see plugins/java.lua): java_extensions() returns OSGi
+      -- bundle jars extracted from the boot-ls jar itself, loaded straight
+      -- into jdtls's own bundle list, giving jdtls its own Spring-aware
+      -- extras (bean/request-mapping code lenses, etc.) directly.
       local sb_ok, spring_boot = pcall(require, "spring_boot")
       if sb_ok then
         vim.list_extend(bundles, spring_boot.java_extensions())

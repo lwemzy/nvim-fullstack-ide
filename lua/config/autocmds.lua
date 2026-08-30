@@ -18,17 +18,21 @@ autocmd("BufReadPost", {
   end,
 })
 
--- Java: 2-space indent (Google Java Style Guide §4.2) — matches
--- java-google-style.xml's actual formatter output (ftplugin/java.lua),
--- so what you type before format-on-save already looks like the result.
+-- Java: 2-space indent (Google Java Style Guide §4.2) — matches both
+-- palantir-java-format's actual output (plugins/editor.lua, the real Java
+-- formatter now) and java-google-style.xml's profile (ftplugin/java.lua,
+-- kept as the lsp_fallback safety net), so what you type already looks
+-- like the result either way.
 autocmd("FileType", {
   group = augroup("java_settings", { clear = true }),
   pattern = "java",
   callback = function()
     vim.opt_local.tabstop = 2
     vim.opt_local.shiftwidth = 2
-    -- Google style §4.4: line length is 100 columns
-    vim.opt_local.colorcolumn = "100"
+    -- palantir-java-format's line width is a fixed 120 columns — neither it
+    -- nor google-java-format allows a custom width (deliberate in both
+    -- tools) — no longer the 100-column Google Style Guide §4.4 target.
+    vim.opt_local.colorcolumn = "120"
   end,
 })
 

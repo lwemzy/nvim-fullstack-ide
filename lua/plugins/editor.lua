@@ -171,6 +171,19 @@ return {
           javascriptreact = prettier_or_none,
           typescript      = prettier_or_none,
           typescriptreact = prettier_or_none,
+          -- palantir-java-format, not jdtls/Eclipse: Eclipse's JDT formatter
+          -- (previously the sole Java formatter, via lsp_fallback below)
+          -- uses its own ad-hoc alignment/wrapping algorithm for chained
+          -- method calls — not a real pretty-printer — and produces an
+          -- ever-deepening "staircase" on fluent/builder-style chains
+          -- (assertions, Mockito, builders) that no XML profile setting
+          -- fixes. palantir-java-format is a google-java-format fork built
+          -- specifically to fix method-chain/lambda/stream formatting.
+          -- Fixed 120-col width (neither it nor google-java-format allows a
+          -- custom width — deliberate in both tools), so this is no longer
+          -- 100-col "Google Style Guide" output — see autocmds.lua's
+          -- colorcolumn for the matching guide.
+          java            = { "palantir-java-format" },
           json            = { "prettierd", "prettier", stop_after_first = true },
           jsonc           = { "prettierd", "prettier", stop_after_first = true },
           css             = { "prettierd", "prettier", stop_after_first = true },
@@ -201,6 +214,12 @@ return {
           prettierd = {
             env = {
               -- Ensure mason's prettierd is found even if not in system PATH
+              PATH = vim.fn.stdpath("data") .. "/mason/bin:" .. vim.env.PATH,
+            },
+          },
+          ["palantir-java-format"] = {
+            env = {
+              -- Ensure mason's palantir-java-format is found even if not in system PATH
               PATH = vim.fn.stdpath("data") .. "/mason/bin:" .. vim.env.PATH,
             },
           },

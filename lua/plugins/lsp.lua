@@ -51,7 +51,9 @@ return {
         -- plain prettier (not just prettierd): the daemon doesn't accept
         -- ad-hoc CLI overrides, needed for the Google-style fallback in
         -- plugins/editor.lua's conform.nvim config.
-        ensure_installed = { "prettierd", "prettier", "vscode-spring-boot-tools", "stylelint" },
+        -- palantir-java-format: Java's real formatter now (plugins/editor.lua);
+        -- installs as a native binary per-platform, no JVM flag wrangling.
+        ensure_installed = { "prettierd", "prettier", "vscode-spring-boot-tools", "stylelint", "palantir-java-format" },
         run_on_start = true,
       })
     end,
@@ -372,7 +374,14 @@ return {
           ["<C-j>"]     = cmp.mapping.select_next_item(),
           ["<C-b>"]     = cmp.mapping.scroll_docs(-4),
           ["<C-f>"]     = cmp.mapping.scroll_docs(4),
-          ["<C-Space>"] = cmp.mapping.complete(),
+          -- Not <C-Space>: IBus (this machine's input-method switcher) claims
+          -- Control+space as its global trigger hotkey at the OS level, so
+          -- the keystroke never reaches the terminal/Neovim at all — cmp's
+          -- mapping was correctly configured but silently unreachable.
+          -- <C-y> is preset.insert()'s default "confirm without select"
+          -- key; harmless to repurpose since <CR> below already confirms
+          -- (with select=true).
+          ["<C-y>"] = cmp.mapping.complete(),
           ["<C-e>"]     = cmp.mapping.abort(),
           ["<CR>"]      = cmp.mapping.confirm({ select = true }),
           ["<Tab>"] = cmp.mapping(function(fallback)
@@ -403,12 +412,54 @@ return {
         },
       })
 
+      -- Supplementary auto-trigger. nvim-cmp's own trigger (cmp/init.lua)
+      -- only re-requests completions when the cursor advances by exactly
+      -- one column between consecutive TextChangedI events. Any burst
+      -- where several keystrokes land in a single change event — routine
+      -- after an autopair type-over character (e.g. typing over an
+      -- auto-inserted `)`) or resuming typing after a brief pause — breaks
+      -- that chain and can leave the popup silently empty for the rest of
+      -- the word, even though the LSP server has correct results the whole
+      -- time (confirmed directly: jdtls responds correctly in <100ms while
+      -- cmp's own trigger simply never asks again). This is not exposed as
+      -- a cmp config option, so instead of patching the vendored plugin,
+      -- add an independent, debounced safety net: shortly after any real
+      -- edit, if nothing is currently showing, force exactly the same
+      -- request a manual <C-y> would make.
+      local cmp_retrigger_timer = nil
+      vim.api.nvim_create_autocmd({ "TextChangedI", "TextChangedP" }, {
+        group = vim.api.nvim_create_augroup("cmp_robust_retrigger", { clear = true }),
+        callback = function()
+          if cmp_retrigger_timer then
+            cmp_retrigger_timer:stop()
+            cmp_retrigger_timer:close()
+          end
+          cmp_retrigger_timer = vim.defer_fn(function()
+            cmp_retrigger_timer = nil
+            if vim.api.nvim_get_mode().mode == "i" and not cmp.visible() then
+              cmp.complete()
+            end
+          end, 200)
+        end,
+      })
+
       -- SQL buffers (opened via vim-dadbod-ui below): bean/table/column
       -- completion from the active DB connection, ahead of plain buffer words.
       cmp.setup.filetype({ "sql", "mysql", "plsql" }, {
         sources = cmp.config.sources({
           { name = "vim-dadbod-completion", priority = 1000 },
           { name = "buffer", priority = 500 },
+        }),
+      })
+
+      -- Java: no buffer-word fallback. jdtls's own completion is
+      -- comprehensive enough (real classes/methods/fields/variables) that
+      -- plain-text word matches from elsewhere in the file only add noise —
+      -- e.g. unrelated test method names surfacing for an unrelated prefix.
+      cmp.setup.filetype("java", {
+        sources = cmp.config.sources({
+          { name = "nvim_lsp", priority = 1000 },
+          { name = "luasnip", priority = 750 },
         }),
       })
 

@@ -22,6 +22,24 @@ return {
           -- when the cursor sits on either one. Built-in matchparen, just
           -- restyled from a plain underline to ayu-mirage's selection color.
           MatchParen = { bg = "#274364", bold = true, underline = false },
+
+          -- nvim-cmp's completion/documentation popups otherwise nearly
+          -- vanish into the editor: Pmenu's stock bg (#23344B, ayu/init.lua)
+          -- is close enough in luminance to Normal's bg (#1F2430) to barely
+          -- read as a separate surface, and the documentation float defaults
+          -- to NormalFloat, whose bg IS colors.bg — literally identical to
+          -- the editor, zero contrast at all. Give the popup its own clearly
+          -- lighter "elevated panel" tier, a distinctly richer blue for the
+          -- selected item (reusing the same selection color as MatchParen
+          -- above, for palette consistency), and a bright cyan border so the
+          -- whole thing reads as an overlay instead of blending into the
+          -- code behind it.
+          Pmenu       = { fg = "#CCCAC2", bg = "#2E3648" },
+          PmenuSel    = { fg = "#CCCAC2", bg = "#274364", bold = true },
+          PmenuSbar   = { bg = "#2E3648" },
+          PmenuThumb  = { bg = "#5CCFE6" },
+          NormalFloat = { bg = "#2E3648" },
+          FloatBorder = { fg = "#5CCFE6" },
         },
       })
       vim.cmd.colorscheme("ayu-mirage")

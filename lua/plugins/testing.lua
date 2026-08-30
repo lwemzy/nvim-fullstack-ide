@@ -17,20 +17,36 @@ return {
     -- exactly the filetypes the two adapters below actually handle.
     ft = { "java", "javascript", "javascriptreact", "typescript", "typescriptreact" },
     config = function()
+      -- Default test_classname_patterns only match filenames ending in
+      -- Test/Tests/IT/Spec — real classes here (BeerControllerMvc, Beer
+      -- ControllerTestAI) don't fit that convention, so they were silently
+      -- invisible to discovery (no icons, no :Test: Run nearest) despite
+      -- containing real @Test methods. Directory placement (anything under a
+      -- non-main source root) is already a sufficient, correct signal on its
+      -- own — see file_checker.lua's separate `relative_path:contains("main")`
+      -- exclusion. But neotest-java's file_checker.lua has NO file-extension
+      -- check at all (confirmed by reading its source) — it only excludes
+      -- "main" paths, then matches the bare filename stem against these
+      -- patterns. Widening the pattern to ".*" therefore matched every
+      -- non-main file in the project (.classpath, .project, CLAUDE.md,
+      -- compose.yaml, build.gradle, ...), all silently run through
+      -- neotest-java's Java-only treesitter query and erroring on every
+      -- discovery pass (confirmed in neotest.log/neotest-java.log). Wrap the
+      -- returned adapter's is_test_file to add back the extension check the
+      -- pattern used to provide implicitly, while keeping the intended
+      -- looser classname matching.
+      local java_adapter = require("neotest-java")({
+        ignore_wrapper = false,
+        test_classname_patterns = { ".*" },
+      })
+      local java_is_test_file = java_adapter.is_test_file
+      java_adapter.is_test_file = function(file_path)
+        return file_path:match("%.java$") ~= nil and java_is_test_file(file_path)
+      end
+
       require("neotest").setup({
         adapters = {
-          require("neotest-java")({
-            ignore_wrapper = false,
-            -- Default patterns only match filenames ending in Test/Tests/
-            -- IT/Spec — real classes here (BeerControllerMvc, Beer
-            -- ControllerTestAI) don't fit that convention, so they were
-            -- silently invisible to discovery (no icons, no :Test: Run
-            -- nearest) despite containing real @Test methods. Directory
-            -- placement (anything under a non-main source root) is already
-            -- a sufficient, correct signal on its own — see file_checker.lua's
-            -- separate `relative_path:contains("main")` exclusion.
-            test_classname_patterns = { ".*" },
-          }),
+          java_adapter,
           require("neotest-jest")({
             jestCommand      = "npx jest --no-coverage",
             jestConfigFile   = function()
