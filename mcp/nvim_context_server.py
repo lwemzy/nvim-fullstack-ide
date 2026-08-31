@@ -9,7 +9,11 @@ import json
 import sys
 import os
 
-CTX_FILE = "/tmp/nvim-claude-ctx"
+# Per-Neovim-instance path (see claude_cli.lua) — falls back to the old
+# shared path only if unset, e.g. `claude -p` one-shot calls (M.ask()),
+# which don't set this env var since those prompts already carry file
+# context inline via file_prefix() rather than relying on this tool.
+CTX_FILE = os.environ.get("NVIM_CLAUDE_CTX_FILE", "/tmp/nvim-claude-ctx")
 
 
 def send(obj):

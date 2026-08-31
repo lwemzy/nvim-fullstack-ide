@@ -383,7 +383,20 @@ return {
           -- (with select=true).
           ["<C-y>"] = cmp.mapping.complete(),
           ["<C-e>"]     = cmp.mapping.abort(),
-          ["<CR>"]      = cmp.mapping.confirm({ select = true }),
+          -- NOT confirm({ select = true }): that auto-selects and confirms
+          -- the top item even when nothing was explicitly picked, so Enter
+          -- swallows a plain newline any time the menu merely happens to be
+          -- visible (including a spontaneously-reopened one — see the
+          -- cmp_robust_retrigger guard below). Only confirm when the user
+          -- actually navigated to an entry (Tab/Ctrl-j/Ctrl-k); otherwise
+          -- fall through to a real <CR>.
+          ["<CR>"] = cmp.mapping(function(fallback)
+            if cmp.visible() and cmp.get_selected_entry() then
+              cmp.confirm({ select = false })
+            else
+              fallback()
+            end
+          end, { "i", "s" }),
           ["<Tab>"] = cmp.mapping(function(fallback)
             if cmp.visible() then cmp.select_next_item()
             elseif luasnip.expand_or_jumpable() then luasnip.expand_or_jump()
@@ -426,7 +439,35 @@ return {
       -- add an independent, debounced safety net: shortly after any real
       -- edit, if nothing is currently showing, force exactly the same
       -- request a manual <C-y> would make.
+      --
+      -- Guarded on an actual non-blank prefix before the cursor: without
+      -- this, TextChangedI/TextChangedP also fire for edits with nothing to
+      -- complete against — most commonly pressing o/O to open a blank new
+      -- line, which is itself a text change even though nothing was typed —
+      -- and 200ms later this forced a popup open on an empty line with
+      -- nothing to filter against (confirmed live: shows every luasnip
+      -- snippet unfiltered). That's also what made <CR> so disruptive: with
+      -- confirm({select=true}) below, hitting Enter to make a new line while
+      -- that spontaneous popup was still up would silently eat the newline
+      -- and insert whatever snippet topped the list instead.
+      --
+      -- Also backs off after a retrigger fires and still shows nothing.
+      -- jdtls has a real, unsynchronized server-side race in its own
+      -- completion handler (CompletionHandler.isCompletionForConstructor
+      -- reads the document source and the request's offset from two
+      -- different, unlocked places — confirmed by reading eclipse.jdt.ls's
+      -- source directly) that crashes on some requests; a failed request
+      -- means nothing becomes visible, so without a backoff this autocmd
+      -- would just fire straight back into the same still-recovering
+      -- document state every 200ms — confirmed live in this project's
+      -- jdtls log as two crashes 2 seconds apart. Exponential cooldown
+      -- after a miss, reset on the next success, so a genuine one-off
+      -- coalesced-edit miss (the bug this autocmd exists to fix) still
+      -- retries almost immediately, but a run of misses backs off instead
+      -- of hammering.
       local cmp_retrigger_timer = nil
+      local cmp_retrigger_fail_count = 0
+      local cmp_retrigger_cooldown_until = 0
       vim.api.nvim_create_autocmd({ "TextChangedI", "TextChangedP" }, {
         group = vim.api.nvim_create_augroup("cmp_robust_retrigger", { clear = true }),
         callback = function()
@@ -436,9 +477,21 @@ return {
           end
           cmp_retrigger_timer = vim.defer_fn(function()
             cmp_retrigger_timer = nil
-            if vim.api.nvim_get_mode().mode == "i" and not cmp.visible() then
-              cmp.complete()
-            end
+            if vim.api.nvim_get_mode().mode ~= "i" or cmp.visible() then return end
+            if vim.uv.now() < cmp_retrigger_cooldown_until then return end
+            local line = vim.api.nvim_get_current_line()
+            local col = vim.api.nvim_win_get_cursor(0)[2]
+            if not line:sub(1, col):match("%S$") then return end
+
+            cmp.complete()
+            vim.defer_fn(function()
+              if cmp.visible() then
+                cmp_retrigger_fail_count = 0
+              else
+                cmp_retrigger_fail_count = math.min(cmp_retrigger_fail_count + 1, 4)
+                cmp_retrigger_cooldown_until = vim.uv.now() + (2 ^ cmp_retrigger_fail_count) * 200
+              end
+            end, 150)
           end, 200)
         end,
       })

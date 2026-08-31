@@ -112,11 +112,18 @@ autocmd("BufWritePost", {
 -- Auto-reload files changed outside Neovim
 -- TermLeave fires when exiting a terminal (e.g. Claude panel) — ideal for
 -- picking up file changes Claude made while you were in the terminal.
+-- Throttled jointly with claude_cli.lua's own reload timer (see
+-- util/reload.lua) — both exist to catch real external changes, but each
+-- edit Claude makes forces jdtls to fully discard and rebuild that file's
+-- compilation unit (checktime's reload sends didClose+didOpen, never
+-- didChange), so two independent, uncoordinated triggers checking this
+-- often could pile up several of those expensive rebuilds back to back
+-- during one multi-edit AI session.
 autocmd({ "FocusGained", "BufEnter", "CursorHold", "CursorHoldI", "TermLeave" }, {
   group = augroup("auto_reload", { clear = true }),
   callback = function()
     if vim.fn.mode() ~= "c" then
-      vim.cmd("silent! checktime")
+      require("util.reload").throttled_checktime()
     end
   end,
 })

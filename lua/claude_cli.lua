@@ -7,7 +7,15 @@
 
 local M = {}
 
-local CTX_FILE = "/tmp/nvim-claude-ctx"
+-- Per-instance, not a fixed shared path: with two Neovim instances open on
+-- different projects (confirmed a real pattern for this setup — wiremock and
+-- JavaAlgo have both had live jdtls/boot-ls processes at once), a single
+-- shared /tmp/nvim-claude-ctx meant whichever instance's buffer was entered
+-- *last*, anywhere, silently won the file for both panels' "current file"
+-- answers. getpid() is already unique per Neovim process and needs no new
+-- state to track. Passed to the claude process below via
+-- NVIM_CLAUDE_CTX_FILE; nvim_context_server.py reads that same env var.
+local CTX_FILE = "/tmp/nvim-claude-ctx-" .. vim.fn.getpid()
 
 local state = {
   buf   = nil,  -- the persistent terminal buffer
@@ -22,7 +30,11 @@ local function start_reload_timer()
     -- Skip while terminal is actively rendering (Claude streaming output)
     -- to avoid cursor corruption. Fires normally when in any other mode.
     if vim.fn.mode() == "t" then return end
-    vim.cmd("silent! checktime")
+    -- Shared throttle with autocmds.lua's auto_reload — see util/reload.lua
+    -- for why: an unthrottled checktime here can stack expensive jdtls
+    -- didClose+didOpen cycles on top of that autocmd's own, once per real
+    -- edit Claude makes in a multi-edit session.
+    require("util.reload").throttled_checktime()
   end))
 end
 
@@ -91,7 +103,7 @@ local function create_terminal_buf()
 
   vim.api.nvim_buf_call(buf, function()
     vim.fn.termopen({ "claude", "--append-system-prompt", system_prompt }, {
-      env = { EDITOR = "nvim", VISUAL = "nvim" },
+      env = { EDITOR = "nvim", VISUAL = "nvim", NVIM_CLAUDE_CTX_FILE = CTX_FILE },
       on_exit = function()
         state.buf = nil
         state.win = nil
@@ -134,6 +146,19 @@ local function open_panel()
   wo.signcolumn     = "no"
   wo.wrap           = true
 
+  -- Catches every close path other than <C-g> (:q, :close, <C-w>c, a GUI
+  -- close button) — close_panel() only runs via the <C-g> keymap otherwise,
+  -- so any other close left state.win stale (harmlessly caught by
+  -- panel_is_open()'s validity check on the next toggle) but left the
+  -- 2-second reload timer running forever in the background. close_panel()
+  -- is already idempotent (guarded by panel_is_open()), so this is safe to
+  -- also fire when <C-g> itself triggered the close.
+  vim.api.nvim_create_autocmd("WinClosed", {
+    pattern = tostring(state.win),
+    once = true,
+    callback = close_panel,
+  })
+
   vim.cmd("startinsert")
   start_reload_timer()
 end
@@ -141,15 +166,6 @@ end
 function M.toggle_chat()
   if panel_is_open() then
     close_panel()
-  else
-    open_panel()
-  end
-end
-
-function M.focus_chat()
-  if panel_is_open() then
-    vim.api.nvim_set_current_win(state.win)
-    vim.cmd("startinsert")
   else
     open_panel()
   end

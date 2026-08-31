@@ -51,13 +51,22 @@ local config = {
     ".git", "mvnw", "gradlew", "pom.xml", "build.gradle", "build.gradle.kts",
   }) or vim.fn.getcwd(),
 
-  -- Neovim's default (150ms) is tuned for lightweight servers. jdtls
-  -- re-validates/re-publishes diagnostics on every batch of changes it's
-  -- sent (visible in fidget as constant "Publish Diagnostics"/"Validate
-  -- documents" activity), and that work competes with completion requests
-  -- on the same process — widening this reduces how often jdtls gets
-  -- interrupted to re-validate while you're actively typing.
-  flags = { debounce_text_changes = 500 },
+  -- Was widened to 500 on the theory that batching edits reduces how often
+  -- jdtls's revalidation competes with completion requests — but completion
+  -- requests flush any pending debounced edit synchronously before being
+  -- sent regardless of this value (confirmed in Neovim's own LSP client
+  -- source), so that reasoning never actually held. Worse: a bigger batched
+  -- edit takes jdtls's reconciler longer to apply, widening the window
+  -- during which its own completion handler (CompletionHandler.
+  -- isCompletionForConstructor, which reads the document's source and the
+  -- request's offset from two unsynchronized places — confirmed by reading
+  -- eclipse.jdt.ls's source directly) can read a stale, too-short document
+  -- against a newer offset and crash with StringIndexOutOfBoundsException —
+  -- confirmed repeatedly in this project's jdtls workspace log. Back to
+  -- Neovim's own default to keep each reconciliation pass small and fast,
+  -- narrowing that race window (can't eliminate it — genuine unfixed
+  -- upstream bug, see eclipse-jdtls/eclipse.jdt.ls#2196).
+  flags = { debounce_text_changes = 150 },
 
   capabilities = capabilities,
 
