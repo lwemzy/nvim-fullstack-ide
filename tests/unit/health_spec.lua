@@ -44,18 +44,15 @@ end
 --- report whatever JDKs the machine running the suite happens to have — and the
 --- interesting cases are the ones no developer machine is in.
 local function fake_jdk(list)
-  package.loaded["config.jdk"] = {
-    list = function() return list end,
-    newest = function(min)
-      for _, j in ipairs(list) do
-        if j.major >= (min or 21) then return j end
-      end
-      return nil
-    end,
-    runtimes = function()
-      return vim.tbl_map(function(j) return { name = "JavaSE-" .. j.major, path = j.path } end, list)
-    end,
-  }
+  package.loaded["config.jdk"] = nil
+  local jdk = require("config.jdk")
+  -- Only list() is replaced. Every other function in that module reads its
+  -- candidates through M.list() rather than through a captured local, so the real
+  -- LTS preference and the real runtime naming are what this report is built
+  -- from — a hand-written stand-in for those would have this spec asserting
+  -- against a copy of the logic instead of the logic. The require cache is
+  -- dropped first so the table being mutated is this case's own.
+  jdk.list = function() return list end
 end
 
 local function check()
@@ -104,6 +101,26 @@ describe("nvim-ide.health", function()
       local report = check()
       assert.is_true(has(report, "ok", "Java 25 (/opt/java-25)"))
       assert.is_true(has(report, "info", "JavaSE-25, JavaSE-17"))
+    end)
+
+    it("says why a newer JDK than the launcher's is not being used", function()
+      -- Without this line the report reads as a discovery bug: Java 26 is listed
+      -- two lines above and the server is running on 25. The host JVM is capped
+      -- at the newest LTS deliberately.
+      fake_jdk({ { path = "/opt/java-26", major = 26 }, { path = "/opt/java-25", major = 25 } })
+      local report = check()
+      assert.is_true(has(report, "ok", "Java 25 (/opt/java-25)"))
+      assert.is_true(has(report, "info", "Java 26 is newer but not LTS"))
+      -- Still registered, so a project can target it.
+      assert.is_true(has(report, "info", "JavaSE-26, JavaSE-25"))
+    end)
+
+    it("says nothing about LTS when the launcher is already the newest JDK", function()
+      -- The common case; a note explaining a choice that was never made would be
+      -- noise in a report whose whole job is to be scanned quickly.
+      fake_jdk({ { path = "/opt/java-25", major = 25 } })
+      local report = check()
+      assert.is_false(has(report, "info", "not LTS"))
     end)
 
     it("errors when mason's jdtls launcher is missing", function()

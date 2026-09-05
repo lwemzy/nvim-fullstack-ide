@@ -192,7 +192,7 @@ describe("config.jdk", function()
       local home = make_jdk(root .. "/jdk-home-21", "21.0.5")
       local jdk = jdk_with({})
       H.stub(vim.env, "JDK_HOME", home)
-      assert.equals(home, assert(jdk.newest(21)).path)
+      assert.equals(home, assert(jdk.server_jdk(21)).path)
     end)
 
     it("searches every installed sdkman JDK, not only the selected one", function()
@@ -232,7 +232,7 @@ describe("config.jdk", function()
       -- hand-unpacked tarball, and any distro layout not globbed above.
       local jdk = jdk_with({})
       fake_path_java(make_jdk(root .. "/path-jdk-21", "21.0.5"))
-      assert.equals(root .. "/path-jdk-21", assert(jdk.newest(21)).path)
+      assert.equals(root .. "/path-jdk-21", assert(jdk.server_jdk(21)).path)
     end)
 
     it("ignores a PATH java that is a version-manager shim", function()
@@ -269,30 +269,66 @@ describe("config.jdk", function()
     end)
   end)
 
-  describe("newest", function()
-    it("returns the newest JDK at or above the minimum", function()
+  describe("server_jdk", function()
+    it("returns the newest LTS at or above the minimum", function()
       local jdk = jdk_with({
         make_jdk(root .. "/j25", "25.0.4"),
         make_jdk(root .. "/j17", "17.0.9"),
         make_jdk(root .. "/j8", "1.8.0_503"),
       })
-      assert.equals(25, jdk.newest(17).major)
-      assert.equals(25, jdk.newest(21).major)
+      assert.equals(25, jdk.server_jdk(17).major)
+      assert.equals(25, jdk.server_jdk(21).major)
       -- min_major is a floor, not a preference: an old JDK is never chosen just
       -- because it matches more exactly.
-      assert.equals(25, jdk.newest(8).major)
+      assert.equals(25, jdk.server_jdk(8).major)
+    end)
+
+    it("skips a newer non-LTS release in favour of the LTS below it", function()
+      -- The case this exists for: this machine has both, and was launching jdtls
+      -- on 26. The host JVM for a long-lived Eclipse/OSGi server is where an LTS
+      -- is worth having — a non-LTS gets six months of updates and is where JEP
+      -- removals land first.
+      local jdk = jdk_with({
+        make_jdk(root .. "/j26", "26.0.2"),
+        make_jdk(root .. "/j25", "25.0.4"),
+      })
+      assert.equals(25, jdk.server_jdk(21).major)
+      -- ...and 26 is still discovered, so it can be registered as a runtime and
+      -- targeted by a project. Capping the host must not cap the compiler.
+      assert.equals(26, jdk.list()[1].major)
+    end)
+
+    it("uses a non-LTS release when it is the only qualifying JDK", function()
+      -- Preference, not a requirement. On a machine whose only JDK is 26 this is
+      -- the difference between a working server and none at all.
+      local jdk = jdk_with({
+        make_jdk(root .. "/j26", "26.0.2"),
+        make_jdk(root .. "/j17", "17.0.9"),
+      })
+      assert.equals(26, jdk.server_jdk(21).major)
+    end)
+
+    it("recognises an LTS released after this config was written", function()
+      -- The cadence is every fourth release from 21, encoded as a rule rather
+      -- than a list so 29 does not have to be a code change in 2027.
+      local jdk = jdk_with({
+        make_jdk(root .. "/j31", "31.0.1"),
+        make_jdk(root .. "/j29", "29.0.1"),
+        make_jdk(root .. "/j25", "25.0.4"),
+      })
+      assert.equals(29, jdk.server_jdk(21).major)
     end)
 
     it("returns nil when nothing meets the minimum", function()
       local jdk = jdk_with({ make_jdk(root .. "/j8", "1.8.0_503") })
       -- jdtls hard-refuses to launch below 21; a wrong answer here would be a
       -- server that dies at startup instead of a clean "no suitable JDK".
-      assert.is_nil(jdk.newest(21))
+      assert.is_nil(jdk.server_jdk(21))
     end)
 
     it("defaults the minimum to 21", function()
       local jdk = jdk_with({ make_jdk(root .. "/j17", "17.0.9") })
-      assert.is_nil(jdk.newest())
+      assert.is_nil(jdk.server_jdk())
     end)
   end)
 

@@ -103,7 +103,10 @@ describe("ftplugin/java.lua", function()
       -- here means nothing on this machine can run jdtls.
       package.loaded["config.jdk"] = nil
       local jdk = require("config.jdk")
-      H.stub(jdk, "newest", function() return nil end)
+      -- list(), not server_jdk(): everything else in that module reads through
+      -- it, so this is "the machine has no JDK" rather than "one function was
+      -- told to say no", and the real selection code still runs.
+      H.stub(jdk, "list", function() return {} end)
 
       open_java(java_project("nojdk"))
 
@@ -197,7 +200,7 @@ describe("ftplugin/java.lua", function()
       assert.is_true(vim.tbl_contains(captured.cmd, "--jvm-arg=-XX:GCTimeRatio=4"))
     end)
     it("pins the launcher to a discovered JDK 21+ when one exists", function()
-      local newest = require("config.jdk").newest(21)
+      local newest = require("config.jdk").server_jdk(21)
       local found
       for _, arg in ipairs(captured.cmd) do
         found = found or arg:match("^%-%-java%-executable=(.*)$")

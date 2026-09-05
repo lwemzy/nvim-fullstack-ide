@@ -142,18 +142,51 @@ function M.list()
   return cached
 end
 
--- Newest JDK that is at least `min_major`, or nil. jdtls 1.60+ hard-refuses to
--- launch below 21 (mason/packages/jdtls/bin/jdtls.py); boot-ls needs 17+.
-function M.newest(min_major)
-  for _, jdk in ipairs(M.list()) do
-    if jdk.major >= (min_major or 21) then return jdk end
-  end
-  return nil
+-- Long-term-support majors: 8, 11 and 17, then every fourth release from 21
+-- (21, 25, 29, …), which is the two-year cadence Oracle has committed to.
+-- Encoded as a rule and not a list so a release that lands after this config was
+-- written is still recognised for what it is.
+local function is_lts(major)
+  if major == 8 or major == 11 or major == 17 then return true end
+  return major >= 21 and (major - 21) % 4 == 0
 end
 
--- Path to a `java` binary of at least `min_major`, or nil.
+-- The JDK to *run* a language server on: the newest LTS that meets `min_major`,
+-- falling back to the newest JDK of any kind when no LTS does. nil when nothing
+-- qualifies at all. jdtls 1.60+ hard-refuses to launch below 21
+-- (mason/packages/jdtls/bin/jdtls.py); boot-ls needs 17+.
+--
+-- Newest-of-any-kind was the wrong default for a *host* JVM. jdtls is a
+-- long-lived JVM running a large Eclipse/OSGi stack that is developed and tested
+-- against LTS releases; a non-LTS one gets six months of updates and is where
+-- JEP removals land first (sun.misc.Unsafe's memory-access methods are the live
+-- example — warned in 24, and going away — and JDT's dependency chain is exactly
+-- the kind of code that uses them). Picking the LTS costs nothing: it is only
+-- the JVM the server itself runs on, and every JDK found is still registered as
+-- a runtime by M.runtimes() below, so a project that targets the newest release
+-- still compiles against it. This machine had 25 and 26 installed and was
+-- launching jdtls on 26.
+--
+-- The fallback matters as much as the preference: on a machine whose only JDK is
+-- 26, using it is the difference between a working server and none.
+function M.server_jdk(min_major)
+  min_major = min_major or 21
+  local newest, newest_lts
+  -- M.list() is newest first, so the first match in each category is the answer.
+  for _, jdk in ipairs(M.list()) do
+    if jdk.major >= min_major then
+      newest = newest or jdk
+      if not newest_lts and is_lts(jdk.major) then newest_lts = jdk end
+      if newest_lts then break end
+    end
+  end
+  return newest_lts or newest
+end
+
+-- Path to a `java` binary to run a language server on, of at least
+-- `min_major`, or nil.
 function M.java_bin(min_major)
-  local jdk = M.newest(min_major)
+  local jdk = M.server_jdk(min_major)
   return jdk and (jdk.path .. "/bin/java") or nil
 end
 

@@ -44,8 +44,13 @@ local capabilities = vim.tbl_deep_extend(
 -- jdtls itself must RUN on 21+; a project may still target an older release, so
 -- every JDK found gets registered as an available runtime below and the newest
 -- one is marked default.
+--
+-- server_jdk, not "the newest JDK installed": the host JVM is picked as the
+-- newest *LTS* that qualifies (see config.jdk), because that is what the Eclipse
+-- stack is tested against — while the runtimes below still expose every JDK, so
+-- capping the host does not cap what a project can target.
 local jdk = require("config.jdk")
-local launcher_jdk = jdk.newest(21)
+local launcher_jdk = jdk.server_jdk(21)
 
 -- Bail rather than start. config.jdk now includes whatever bare `java` resolves
 -- to on PATH, which is the launcher's own fallback, so nil here means nothing on

@@ -66,9 +66,16 @@ local function jdks()
   -- The one that decides whether Java works at all. jdtls 1.60+ aborts at
   -- launch below 21 (mason/packages/jdtls/bin/jdtls.py), so this is not a
   -- preference — it is the difference between a working server and none.
-  local launcher = jdk.newest(21)
+  local launcher = jdk.server_jdk(21)
   if launcher then
     health.ok(("jdtls will launch on Java %d (%s)"):format(launcher.major, launcher.path))
+    -- Said out loud because otherwise it looks like a discovery bug: the newest
+    -- JDK on the machine is right there in the list above, and the server is not
+    -- using it. The host JVM is deliberately the newest LTS.
+    if list[1] and list[1].major > launcher.major then
+      health.info(("Java %d is newer but not LTS — kept as a runtime, not used to launch")
+        :format(list[1].major))
+    end
   else
     health.error("no JDK 21+ — jdtls refuses to launch, so Java completion is OFF", {
       hint("openjdk@21", "openjdk-21-jdk", "java-21-openjdk-devel")
