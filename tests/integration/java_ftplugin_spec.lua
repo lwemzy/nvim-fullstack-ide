@@ -92,6 +92,32 @@ describe("ftplugin/java.lua", function()
       end
       assert.is_true(warned)
     end)
+
+    it("refuses to start and errors when no JDK 21+ was found", function()
+      -- It used to warn and start anyway. The launcher then aborted on its own
+      -- ("jdtls requires at least Java 21", mason/packages/jdtls/bin/jdtls.py),
+      -- leaving a client that attached and immediately exited — so the visible
+      -- symptom was Java completion silently absent, with a one-line startup
+      -- warning as the only clue. Safe to treat as fatal now that config.jdk also
+      -- considers bare `java` on PATH, which is the launcher's own fallback: nil
+      -- here means nothing on this machine can run jdtls.
+      package.loaded["config.jdk"] = nil
+      local jdk = require("config.jdk")
+      H.stub(jdk, "newest", function() return nil end)
+
+      open_java(java_project("nojdk"))
+
+      assert.is_nil(captured)
+      local level
+      for _, n in ipairs(notifications) do
+        if type(n.msg) == "string" and n.msg:find("no JDK 21+", 1, true) then
+          level = n.level
+        end
+      end
+      -- ERROR, not WARN: nothing about Java works, and the message carries the
+      -- per-platform install command that fixes it.
+      assert.equals(vim.log.levels.ERROR, level)
+    end)
   end)
 
   describe("project root and workspace", function()

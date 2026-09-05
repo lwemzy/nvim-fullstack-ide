@@ -31,29 +31,42 @@ end
 --- Point config.jdk at exactly `paths` and nothing else, then load it fresh.
 --- The module caches its result in a module-local, so the require cache has to
 --- be dropped between cases or the first case decides them all.
+---
+--- Returns the module and the list of glob patterns it asked for, in order, so a
+--- case can assert on *which* locations are searched rather than only on what a
+--- fixture happened to return.
 local function jdk_with(paths)
   package.loaded["config.jdk"] = nil
   H.stub(vim.env, "JAVA_HOME", nil)
-  -- The real expand would resolve to this machine's sdkman install, which does
-  -- have a JDK in it — that would leak a 25 into every expectation below.
-  H.stub(vim.fn, "expand", function(s)
-    if type(s) == "string" and s:find("sdkman", 1, true) then
-      return "/nonexistent/sdkman/current"
-    end
-    return s
-  end)
-  local first = true
-  H.stub(vim.fn, "glob", function()
-    -- All of the module's candidate paths come from globs; returning the full
-    -- set for the first pattern and nothing after is equivalent to them being
-    -- found, and keeps the fixture independent of the pattern list's order.
-    if first then
-      first = false
-      return vim.deepcopy(paths)
-    end
+  H.stub(vim.env, "JDK_HOME", nil)
+  -- Bare `java` on PATH is a real candidate now, and on Linux /usr/bin/java is a
+  -- symlink into a real JDK — so without this the machine running the suite
+  -- would inject a JDK of its own into every expectation below. (It does not on
+  -- macOS, where /usr/bin/java is a stub with no `release` file, which is
+  -- exactly the kind of accident that makes a suite pass on one OS only.)
+  H.stub(vim.fn, "exepath", function() return "" end)
+  local globbed = {}
+  H.stub(vim.fn, "glob", function(pat)
+    table.insert(globbed, pat)
+    -- All of the module's globbed candidates come from this one function;
+    -- returning the full set for the first pattern and nothing after is
+    -- equivalent to them being found, and keeps the fixture independent of the
+    -- pattern list's order and length.
+    if #globbed == 1 then return vim.deepcopy(paths) end
     return {}
   end)
-  return require("config.jdk")
+  return require("config.jdk"), globbed
+end
+
+--- Make bare `java` on PATH resolve into `home`, the way /usr/bin/java does on
+--- Linux. `home` need not be a JDK — the shim case is a case too.
+local function fake_path_java(home)
+  H.stub(vim.fn, "exepath", function(name)
+    return name == "java" and (home .. "/bin/java") or ""
+  end)
+  -- The module resolves symlinks before deriving the home; the fixture is
+  -- already a real directory, so resolve is identity here.
+  H.stub(vim.fn, "resolve", function(p) return p end)
 end
 
 describe("config.jdk", function()
@@ -170,6 +183,79 @@ describe("config.jdk", function()
       H.stub(vim.env, "JAVA_HOME", home)
       -- Same major, so the dedupe decides — and JAVA_HOME is inserted first
       -- precisely so an explicit choice wins.
+      assert.equals(home, jdk.list()[1].path)
+    end)
+
+    it("reads $JDK_HOME as well as $JAVA_HOME", function()
+      -- Gradle and several JDK installers set JDK_HOME and not JAVA_HOME, so a
+      -- machine whose only JDK is named that way looked JDK-less.
+      local home = make_jdk(root .. "/jdk-home-21", "21.0.5")
+      local jdk = jdk_with({})
+      H.stub(vim.env, "JDK_HOME", home)
+      assert.equals(home, assert(jdk.newest(21)).path)
+    end)
+
+    it("searches every installed sdkman JDK, not only the selected one", function()
+      -- The bug: only ~/.sdkman/candidates/java/current was probed, so a machine
+      -- with 21 installed but 17 selected reported no JDK 21 at all — and jdtls,
+      -- which refuses to launch below 21, silently never started. `current` is
+      -- still searched first so an explicit `sdk use` wins the same-major dedupe.
+      local _, globbed = jdk_with({})
+      require("config.jdk").list()
+      local current = vim.fn.index(globbed, "~/.sdkman/candidates/java/current")
+      local all = vim.fn.index(globbed, "~/.sdkman/candidates/java/*")
+      assert.is_true(current >= 0, "sdkman's selected JDK is not searched")
+      assert.is_true(all >= 0, "sdkman's other installed JDKs are not searched")
+      assert.is_true(current < all, "the selected JDK must be searched first")
+    end)
+
+    it("searches the version-manager and IntelliJ install dirs", function()
+      -- These are shim-based (jenv/asdf/mise) or IDE-managed, so nothing on PATH
+      -- or under /usr/lib/jvm points at them — on a Linux box IntelliJ's ~/.jdks
+      -- is very often the only JDK present.
+      local _, globbed = jdk_with({})
+      require("config.jdk").list()
+      for _, pat in ipairs({
+        "~/.jdks/*",
+        "~/.local/share/mise/installs/java/*",
+        "~/.asdf/installs/java/*",
+      }) do
+        assert.is_true(vim.fn.index(globbed, pat) >= 0, pat .. " is not searched")
+      end
+    end)
+
+    it("falls back to bare java on PATH when no known location matches", function()
+      -- The catch-all, and the reason ftplugin/java.lua can now treat "no JDK
+      -- 21+" as fatal: this is the same JDK the mason jdtls launcher would pick
+      -- for itself given no --java-executable, so once it is a candidate here,
+      -- nil really does mean nothing on the machine can run jdtls. Covers Nix, a
+      -- hand-unpacked tarball, and any distro layout not globbed above.
+      local jdk = jdk_with({})
+      fake_path_java(make_jdk(root .. "/path-jdk-21", "21.0.5"))
+      assert.equals(root .. "/path-jdk-21", assert(jdk.newest(21)).path)
+    end)
+
+    it("ignores a PATH java that is a version-manager shim", function()
+      -- jenv/asdf put a wrapper *script* on PATH, so ../.. is the manager's own
+      -- directory and not a JDK home. Accepting it would register a runtime with
+      -- no `release` file, which poisons jdtls's java.configuration.runtimes.
+      local shim = root .. "/.jenv"
+      vim.fn.mkdir(shim .. "/bin", "p")
+      H.write(shim .. "/bin/java", { "#!/bin/sh", "exec real-java \"$@\"" })
+      vim.fn.setfperm(shim .. "/bin/java", "rwxr-xr-x")
+      local jdk = jdk_with({})
+      fake_path_java(shim)
+      -- Executable bin/java, but no release file anywhere resolve_home looks.
+      assert.same({}, jdk.list())
+    end)
+
+    it("prefers JAVA_HOME over bare java on PATH", function()
+      -- PATH java is a fallback, not an override: a project switched with
+      -- JAVA_HOME must not lose to whatever the shell's default happens to be.
+      local home = make_jdk(root .. "/env-21", "21.0.5")
+      local jdk = jdk_with({})
+      fake_path_java(make_jdk(root .. "/path-21", "21.0.1"))
+      H.stub(vim.env, "JAVA_HOME", home)
       assert.equals(home, jdk.list()[1].path)
     end)
 

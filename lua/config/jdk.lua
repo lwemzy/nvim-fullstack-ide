@@ -71,13 +71,37 @@ function M.list()
   if cached then return cached end
 
   local candidates = {}
-  if vim.env.JAVA_HOME and vim.env.JAVA_HOME ~= "" then
-    table.insert(candidates, vim.env.JAVA_HOME)
+  for _, var in ipairs({ "JAVA_HOME", "JDK_HOME" }) do
+    if vim.env[var] and vim.env[var] ~= "" then
+      table.insert(candidates, vim.env[var])
+    end
   end
-  table.insert(candidates, vim.fn.expand("~/.sdkman/candidates/java/current"))
+
+  -- Whatever bare `java` resolves to on PATH, via its real home. The catch-all,
+  -- and the one candidate that cannot go stale: it is *also* exactly what the
+  -- mason jdtls launcher falls back to when handed no --java-executable, so
+  -- including it keeps our answer and the launcher's from disagreeing — the
+  -- disagreement being "we found nothing, warned, and started a launcher that
+  -- then ran fine on a JDK we never knew about", or the reverse. Covers any
+  -- layout not globbed below: Nix, a distro that does not use /usr/lib/jvm, a
+  -- hand-unpacked tarball on PATH. Version-manager *shims* (jenv, asdf) resolve
+  -- to a wrapper script whose ../.. is not a JDK home, which resolve_home
+  -- rejects — hence the explicit install globs for those below.
+  local path_java = vim.fn.exepath("java")
+  if path_java ~= "" then
+    table.insert(candidates, vim.fn.fnamemodify(vim.fn.resolve(path_java), ":h:h"))
+  end
+
   -- Newest match first within each pattern. Covers Homebrew keg-only JDKs
   -- (macOS), the standard Linux JVM dir, and Windows install roots.
   for _, pat in ipairs({
+    -- sdkman's selected JDK first, so an explicit `sdk use java` wins the
+    -- same-major dedupe below over an identically-versioned system JDK...
+    "~/.sdkman/candidates/java/current",
+    -- ...but every installed one is a candidate too. Only probing `current`
+    -- meant a machine with 21 installed and 17 selected reported no JDK 21 at
+    -- all, so jdtls (which refuses to launch below 21) silently never started.
+    "~/.sdkman/candidates/java/*",
     "/opt/homebrew/opt/openjdk@*",
     "/usr/local/opt/openjdk@*",
     "/opt/homebrew/opt/openjdk",
@@ -85,6 +109,12 @@ function M.list()
     "/Library/Java/JavaVirtualMachines/*/Contents/Home",
     "/usr/lib/jvm/*",
     "/usr/java/*",
+    -- IntelliJ downloads JDKs here, which on a Linux dev box is very often the
+    -- only JDK present and is invisible to every system path above.
+    "~/.jdks/*",
+    -- Version managers, by install dir rather than by shim (see above).
+    "~/.local/share/mise/installs/java/*",
+    "~/.asdf/installs/java/*",
     "C:/Program Files/Java/*",
     "C:/Program Files/Eclipse Adoptium/*",
   }) do

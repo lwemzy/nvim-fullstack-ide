@@ -47,12 +47,25 @@ local capabilities = vim.tbl_deep_extend(
 local jdk = require("config.jdk")
 local launcher_jdk = jdk.newest(21)
 
+-- Bail rather than start. config.jdk now includes whatever bare `java` resolves
+-- to on PATH, which is the launcher's own fallback, so nil here means nothing on
+-- this machine can run jdtls at all — and starting it anyway produced the worst
+-- possible symptom: the launcher aborts with "jdtls requires at least Java 21"
+-- on stderr, nvim reports a client that attached and immediately exited, and
+-- Java completion is simply absent with a one-line startup warning as the only
+-- clue. An error and no client is the same outcome, said out loud.
 if not launcher_jdk then
   vim.notify(
-    "jdtls: no JDK 21+ found — Java completion/diagnostics will not work.\n"
-      .. "Install one (e.g. `brew install openjdk@21`, `apt install openjdk-21-jdk`) or set $JAVA_HOME.",
-    vim.log.levels.WARN
+    "jdtls: no JDK 21+ found — Java completion/diagnostics are OFF.\n"
+      .. "jdtls refuses to launch below Java 21. Install one and reopen the file:\n"
+      .. "  macOS   brew install openjdk@21\n"
+      .. "  Debian  sudo apt install openjdk-21-jdk\n"
+      .. "  Fedora  sudo dnf install java-21-openjdk-devel\n"
+      .. "  any     sdk install java 21-tem   (sdkman)\n"
+      .. "Already have one? Point $JAVA_HOME at it — see :checkhealth nvim-ide.",
+    vim.log.levels.ERROR
   )
+  return
 end
 
 -- Lombok ships inside the Mason jdtls package. The old path
@@ -83,7 +96,8 @@ local config = {
       "--jvm-arg=-XX:+UseG1GC",
       "--jvm-arg=-XX:GCTimeRatio=4",
     }
-    if launcher_jdk then c[#c + 1] = "--java-executable=" .. launcher_jdk.path .. "/bin/java" end
+    -- Unconditional: the no-JDK case returned above.
+    c[#c + 1] = "--java-executable=" .. launcher_jdk.path .. "/bin/java"
     if lombok_arg then c[#c + 1] = lombok_arg end
     return c
   end)(),
@@ -111,7 +125,7 @@ local config = {
           -- Run the Gradle tooling API on a JDK we actually located. Gradle
           -- otherwise inherits jdtls's own JVM, which is fine, but being
           -- explicit keeps the daemon off a stray old PATH java.
-          java = { home = launcher_jdk and launcher_jdk.path or nil },
+          java = { home = launcher_jdk.path },
           -- THE fix for "jdtls attaches but returns zero completions" in any
           -- Gradle project that declares a toolchain, e.g.
           --   java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }

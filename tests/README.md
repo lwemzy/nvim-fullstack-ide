@@ -205,6 +205,18 @@ Conventions worth following:
 - **`vim.tbl_filter` iterates with `pairs`**, and `H.spy`'s log carries a
   non-integer `original` key — so the predicate gets handed a function. Count a
   spy log with `ipairs`.
+- **nvim's LSP file watcher is a different implementation per OS.**
+  `vim/lsp/_watchfiles.lua` picks recursive `fs_event` on macOS/Windows,
+  `inotifywait` on Linux when that binary exists, and per-directory `fs_event`
+  otherwise. Anything asserting on watch behaviour passes or fails by OS unless
+  it stubs `_watchfunc`, and the fallback is why "a new `.java` file has no
+  completion" reproduces only on Linux.
+- **Anything reading the environment must be stubbed, or the suite passes by
+  accident on one OS.** `config.jdk` now considers bare `java` on PATH: on macOS
+  `/usr/bin/java` is a stub with no `release` file and is discarded, but on Linux
+  it is a symlink into a real JDK — so `jdk_spec`'s harness stubs `exepath`.
+  `health_spec` replaces `config.jdk` outright for the same reason: it caches its
+  scan, so the machine's real JDKs would decide the expectations.
 
 ## Config bugs these tests found
 
@@ -271,6 +283,29 @@ ones that fail if they come back.
 - The prettier check read only the *nearest* `package.json`, so a monorepo
   workspace package got the Google fallback while the repo root's `"prettier"`
   key (and CI) said otherwise. — `conform_spec`
+
+### Found by running the config on a second machine (Linux), fixed here
+
+Both were invisible on the machine the config was written on, which is the point:
+they are environment differences, not logic errors, so only a second machine or a
+health check surfaces them.
+
+- `config.jdk` probed only `~/.sdkman/candidates/java/current`, so a machine with
+  21 installed and 17 *selected* reported no JDK 21 at all — and jdtls refuses to
+  launch below 21, so Java completion silently never worked. Every installed
+  sdkman JDK is now a candidate, plus `~/.jdks` (IntelliJ), mise/asdf install
+  dirs, `$JDK_HOME`, and bare `java` on PATH as the catch-all. — `jdk_spec`
+- With no JDK 21+, `ftplugin/java.lua` warned and started jdtls anyway. The
+  launcher then aborted itself, leaving a client that attached and immediately
+  exited: the visible symptom was completion absent with a one-line startup
+  warning as the only clue. It is now fatal and loud, which is safe precisely
+  because PATH `java` is a candidate — nil really does mean nothing on the
+  machine can run jdtls. — `java_ftplugin_spec`
+
+`:checkhealth nvim-ide` (`lua/nvim-ide/health.lua`, tested by `health_spec`) exists
+for this whole class: it reports the JDKs found, which one jdtls will launch on,
+the mason payloads whose absence removes a feature silently, and which LSP file-
+watching backend this OS gave Neovim.
 
 ### Still pinned, deliberately not fixed
 
