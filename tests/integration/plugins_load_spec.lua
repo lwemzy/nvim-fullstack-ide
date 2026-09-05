@@ -63,14 +63,11 @@ local PLUGIN_COMMANDS = {
 --- Commands lua/config/keymaps.lua invokes that genuinely do not exist on this
 --- Neovim, with the reason. `check` re-verifies the reason still holds, so this
 --- allowlist cannot quietly outlive the situation that justified it.
-local KNOWN_MISSING_COMMANDS = {
-  LspLog = {
-    reason = "nvim-lspconfig's plugin/lspconfig.lua returns early when `:lsp` exists "
-      .. "(Neovim 0.12 ships it), so it registers no Lsp* commands at all — "
-      .. "keymaps.lua's <F1> mapping needs `:lsp log` or `:checkhealth vim.lsp`",
-    check = function() return vim.fn.exists(":lsp") == 2 end,
-  },
-}
+--- Currently empty: the only entry was `:LspLog`, which nvim-lspconfig never
+--- registers on Neovim 0.12 (plugin/lspconfig.lua returns early when `:lsp`
+--- already exists). keymaps.lua's <F1> now opens vim.lsp.log.get_filename()
+--- directly instead, so nothing is missing. Kept as the seam for the next one.
+local KNOWN_MISSING_COMMANDS = {}
 
 local lazy_config = require("lazy.core.config")
 local lazy_plugin = require("lazy.core.plugin")

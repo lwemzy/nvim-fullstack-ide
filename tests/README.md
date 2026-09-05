@@ -191,25 +191,45 @@ Conventions worth following:
 - **`:w` on a file that changed on disk prompts** (`W12`) and hangs the run. Use
   `:w!`, or assert the ex-command rather than performing the write.
 
-## Known config bugs pinned by these tests
+## Config bugs these tests found
 
-Found while writing the suite, deliberately **not** fixed here. Each is asserted
-as current behaviour with a `known bug` comment, or left `pending`, so fixing one
-shows up as a failing expectation rather than passing unnoticed.
+### Fixed, and now asserted the other way round
 
-- `<F1>` → `:LspLog` **does not exist** on Neovim 0.12: nvim-lspconfig's
-  `plugin/lspconfig.lua` returns early when `:lsp` exists, so it registers no
-  `Lsp*` commands at all. Needs `:lsp log` (`:checkhealth vim.lsp` for `LspInfo`).
-- `auto_create_dir` feeds URL-ish buffer names straight to `mkdir`, creating a
-  cwd-relative junk tree (`./oil:/tmp/...`) when an `oil://`/`fugitive://` buffer
-  is written.
-- `has_prettier_config` and `is_spring_boot_project` search upward with no `stop`
-  bound, so a `.prettierrc` or `pom.xml` above the project (e.g. in `$HOME`)
-  changes behaviour for every project on the machine.
-- `on_attach` gates on `server_capabilities`, which never gains dynamically
-  registered methods — jdtls registers most of its capabilities that way.
-- `n <C-w>` is mapped to buffer-delete, shadowing the whole native window-command
-  prefix; nine mappings in `config/keymaps.lua` have no `desc`.
+Each was first pinned as current behaviour, then fixed; the specs listed are the
+ones that would fail if it came back.
+
+- `<F1>` was mapped to `:LspLog`, which **does not exist** on Neovim 0.12:
+  nvim-lspconfig's `plugin/lspconfig.lua` returns early when `:lsp` exists, so it
+  registers no `Lsp*` command at all, and 0.12's own `:lsp` takes only
+  `enable|disable|restart|stop` — there is no `log` subcommand. It now opens
+  `vim.lsp.log.get_filename()` directly. (`:checkhealth vim.lsp` replaced
+  `:LspInfo`.) — `keymaps_spec`, `plugins_load_spec`
+- `auto_create_dir` fed URL-ish buffer names straight to `mkdir`, creating a
+  cwd-relative junk tree (`./oil:/tmp/...`) whenever an `oil://`/`fugitive://`
+  buffer was written. It now returns early on any non-empty `buftype`. —
+  `autocmds_spec`, `editing_spec`
+- `has_prettier_config` and `is_spring_boot_project` searched upward with no
+  `stop` bound, so a `.prettierrc` or `pom.xml` above the project (e.g. in
+  `$HOME`) changed behaviour for every project on the machine. Both now go
+  through `config.project.find_upward`, bounded at the VCS root — which also
+  fixed multi-module Maven builds, where the parent POM that declares
+  spring-boot sits above the module. — `project_spec`, `conform_spec`,
+  `project_gating_spec`
+- `on_attach` gated on `client.server_capabilities`, which never gains
+  dynamically registered methods — and jdtls registers most of its capabilities
+  that way, so `<leader>rn`, `<leader>ca` and `gr` never appeared in a Java
+  buffer. It now gates on `client:supports_method(method, bufnr)` and re-runs
+  from the `client/registerCapability` wrapper. — `lsp_attach_spec`
+- Nine mappings in `config/keymaps.lua` had no `desc` (split resize, centred
+  scroll/search, `<Esc>`), so which-key showed them unlabelled. — `keymaps_spec`
+
+### Still pinned, deliberately not fixed
+
+Asserted as current behaviour with a `known bug` comment so that fixing one shows
+up as a failing expectation rather than passing unnoticed.
+
+- `n <C-w>` is mapped to buffer-delete, shadowing the whole native
+  window-command prefix. Kept: it is the deliberate VS Code-style binding.
 - The large-file treesitter opt-out does not apply to `lua`/`markdown`/`help`/
   `query` (nvim's own ftplugins start the parser first).
 - A failed auto-save on a `readonly` buffer is silent (`silent! write` swallows

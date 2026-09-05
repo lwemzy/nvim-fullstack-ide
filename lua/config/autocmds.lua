@@ -175,6 +175,13 @@ autocmd({ "FocusGained", "BufEnter", "CursorHold", "TermLeave" }, {
 autocmd("BufWritePre", {
   group = augroup("auto_create_dir", { clear = true }),
   callback = function(ev)
+    -- Only real files. A plugin buffer (oil://, fugitive://, term://) is written
+    -- through a BufWriteCmd and its name is a URL, not a path: fs_realpath
+    -- returns nil, fnamemodify(":p:h") leaves the scheme alone, and mkdir then
+    -- creates a *cwd-relative* junk tree — writing an oil:// buffer left
+    -- ./oil:/tmp/... inside whatever project you were editing. Every such buffer
+    -- has a non-empty buftype ("acwrite"/"nofile"/"terminal"); a real file's is "".
+    if vim.bo[ev.buf].buftype ~= "" then return end
     local file = vim.uv.fs_realpath(ev.match) or ev.match
     vim.fn.mkdir(vim.fn.fnamemodify(file, ":p:h"), "p")
   end,

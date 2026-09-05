@@ -2,14 +2,19 @@
 --
 -- Two properties are under test, and they are the two that broke in real use:
 --
---   1. GATING IS REAL. Every LSP mapping past the unconditional five is wrapped
---      in `if caps.<x>Provider then`. If that gating regressed to "set them all",
---      the maps would still *exist* on every buffer and would fail only when
---      pressed — vim.lsp.buf.references() on a server without
---      referencesProvider notifies "server does not support …" and does
+--   1. GATING IS REAL, AND IT SEES DYNAMIC REGISTRATIONS. Every LSP mapping past
+--      the unconditional five is wrapped in
+--      `if client:supports_method(<method>, bufnr) then`. If that gating
+--      regressed to "set them all", the maps would still *exist* on every buffer
+--      and would fail only when pressed — vim.lsp.buf.references() on a server
+--      without referencesProvider notifies "server does not support …" and does
 --      nothing. A missing map is discoverable (which-key shows the truth); a
 --      present-but-dead map is not. So the minimal-capability run asserts
 --      ABSENCE, which is the only direction that can catch that regression.
+--      The opposite failure is just as real: gating on the static
+--      client.server_capabilities table missed everything a server registers
+--      after initialize, which for jdtls is nearly all of it — see the
+--      dynamic-registration specs at the bottom of the on_attach block.
 --
 --   2. on_attach REACHES CLIENTS STARTED OUTSIDE vim.lsp.enable(). The config
 --      deliberately does NOT pass on_attach to vim.lsp.config("*"): config
@@ -38,11 +43,15 @@ local UNCONDITIONAL = {
   { lhs = "<leader>d", mode = "n", desc = "Show diagnostic" },
 }
 
---- Every capability-gated mapping, with the server_capabilities field that
---- gates it. Transcribed from on_attach; the point of the table is that both the
---- "present with full caps" and "absent with hover-only caps" runs iterate the
---- SAME list, so a mapping can never be added to one check and forgotten in the
---- other.
+--- Every capability-gated mapping, with the server_capabilities field a server
+--- sets to advertise it at initialize. on_attach gates on
+--- client:supports_method(<method>) rather than on the field directly, but the
+--- field is what these fakes advertise and what supports_method resolves the
+--- method to (vim.lsp.protocol._request_name_to_server_capability), so the two
+--- agree for a statically advertised capability. Transcribed from on_attach; the
+--- point of the table is that both the "present with full caps" and "absent with
+--- hover-only caps" runs iterate the SAME list, so a mapping can never be added
+--- to one check and forgotten in the other.
 local GATED = {
   { lhs = "gD", mode = "n", cap = "declarationProvider" },
   { lhs = "gr", mode = "n", cap = "referencesProvider" },
@@ -317,36 +326,53 @@ describe("lsp on_attach", function()
     assert.is_not_nil(buf_map("i", "<M-k>", bufnr))
   end)
 
-  -- KNOWN GAP, pinned deliberately rather than asserted the other way round.
+  -- The case the whole supports_method()/registerCapability arrangement exists
+  -- for, and the one with the most user-visible impact: jdtls advertises very
+  -- little at initialize and registers most of its capabilities dynamically once
+  -- the project is imported.
   --
-  -- on_attach reads client.server_capabilities, which only ever holds what the
-  -- server advertised at initialize. A capability registered afterwards lands in
-  -- the client's dynamic registrations instead, and nvim's
-  -- client/registerCapability handler does NOT re-run Client:on_attach — it only
-  -- calls vim.lsp._set_defaults and re-attaches the internal
-  -- vim.lsp._capability providers (runtime/lua/vim/lsp/handlers.lua). So
-  -- LspAttach never fires a second time and the gated mapping is never created,
-  -- even though client:supports_method() now says yes.
-  --
-  -- This matters for jdtls specifically: it advertises very little at initialize
-  -- and registers most of its capabilities dynamically (the same behaviour this
-  -- file's inlay-hint workaround exists for). The fix would be to gate on
-  -- client:supports_method(method, bufnr) and re-run the mapping setup from a
-  -- client/registerCapability wrapper, the way the inlay-hint re-request already
-  -- does. Until then this spec records the real behaviour, so that fixing it
-  -- shows up here as a failing expectation instead of going unnoticed.
-  it("does not gain a mapping when the capability is registered dynamically", function()
+  -- Neither half works alone. Gating on client.server_capabilities can never see
+  -- a dynamic registration (it holds only the initialize response — asserted
+  -- below, so this spec fails if the config drifts back to it), and nvim never
+  -- fires LspAttach a second time: its client/registerCapability handler only
+  -- calls vim.lsp._set_defaults and re-attaches the internal vim.lsp._capability
+  -- providers (runtime/lua/vim/lsp/handlers.lua). lsp.lua therefore wraps that
+  -- handler and re-runs on_attach itself.
+  it("gains a mapping when the capability is registered dynamically", function()
     local srv = attach("late_ls", fake_lsp.caps.minimal)
     assert.is_nil(buf_map("n", "<leader>ca", bufnr))
 
     srv.register({ { id = "1", method = "textDocument/codeAction" } })
-    H.wait_for("registration processed", function()
-      return srv.client:supports_method("textDocument/codeAction")
+
+    -- The re-run is scheduled from the handler, so wait on the mapping itself
+    -- rather than on supports_method (which is true one tick earlier).
+    H.wait_for("<leader>ca mapped after dynamic registration", function()
+      return buf_map("n", "<leader>ca", bufnr) ~= nil
     end)
 
-    -- The client can do it; the buffer has no key for it.
+    -- Not via server_capabilities: that stayed empty, which is exactly why the
+    -- static gate could not have produced this mapping.
     assert.is_nil(srv.client.server_capabilities.codeActionProvider)
-    assert.is_nil(buf_map("n", "<leader>ca", bufnr))
+    assert.equals("Code action", buf_map("n", "<leader>ca", bufnr).desc)
+    -- Idempotent: the re-run overwrites, it does not stack duplicates. Matched on
+    -- desc, because nvim_buf_get_keymap reports the lhs already resolved
+    -- (<leader> expanded to the mapleader in force at map time).
+    assert.equals(1, #vim.tbl_filter(function(m) return m.desc == "Code action" end,
+      vim.api.nvim_buf_get_keymap(bufnr, "n")))
+  end)
+
+  it("leaves an unregistered capability's mapping absent after a re-run", function()
+    -- The re-run must not degrade into "set them all": a registration for one
+    -- method may not hand the buffer keys for every other one.
+    local srv = attach("partial_ls", fake_lsp.caps.minimal)
+    srv.register({ { id = "1", method = "textDocument/codeAction" } })
+    H.wait_for("<leader>ca mapped after dynamic registration", function()
+      return buf_map("n", "<leader>ca", bufnr) ~= nil
+    end)
+
+    assert.is_nil(buf_map("n", "<leader>rn", bufnr))
+    assert.is_nil(buf_map("n", "gr", bufnr))
+    assert.is_nil(buf_map("n", "<leader>uh", bufnr))
   end)
 end)
 

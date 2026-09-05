@@ -75,12 +75,22 @@ return {
       -- build.gradle.kts/pom.xml content for the org.springframework.boot
       -- group id — present as either a Gradle plugin id or a Maven/Gradle
       -- dependency coordinate in essentially every real Spring Boot project.
+      -- The bound matters: the previous `stop` was nil whenever vim.fs.root found
+      -- no marker — i.e. exactly the loose-file case it was meant to protect — so
+      -- the search ran to / and a stray pom.xml above the file (in $HOME, say)
+      -- made every .java buffer look like a Spring Boot project and started
+      -- boot-ls for it. config.project.ceiling is never nil-bounded.
+      --
+      -- It also bounds at the VCS root rather than the nearest build file, which
+      -- fixes multi-module projects: the old bound stopped at the module, so a
+      -- parent pom.xml declaring spring-boot (with the module inheriting it) was
+      -- never read and boot-ls never started.
+      local project = require("config.project")
       local function is_spring_boot_project(bufnr)
-        local dirname = vim.fs.dirname(vim.api.nvim_buf_get_name(bufnr))
-        local root = vim.fs.root(bufnr, { ".git", "mvnw", "gradlew", "pom.xml", "build.gradle", "build.gradle.kts" })
-        local build_files = vim.fs.find(
+        local build_files = project.find_upward(
+          bufnr,
           { "pom.xml", "build.gradle", "build.gradle.kts" },
-          { path = dirname, upward = true, stop = root and vim.fs.dirname(root) or nil, limit = math.huge }
+          { limit = math.huge }
         )
         for _, f in ipairs(build_files) do
           local ok, lines = pcall(vim.fn.readfile, f)

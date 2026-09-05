@@ -257,6 +257,54 @@ describe("spring-boot.nvim project gating", function()
     assert.equals(1, gate_java(dir).count)
   end)
 
+  it("ignores a Spring build file above the project's VCS root", function()
+    if skip_reason then return H.skip(skip_reason) end
+
+    -- The whole-machine failure the search bound exists for: one Spring pom.xml
+    -- left in $HOME used to make every loose .java file on the machine start a
+    -- second JVM language server. The repo's .git makes its parent the ceiling,
+    -- and that parent is what stands in for $HOME here. Built by hand because
+    -- the planted file has to live in the parent, and H.fixture's parent is a
+    -- temp directory shared with every other fixture in the process.
+    local above = H.tmpdir("spring-above")
+    local dir = above .. "/repo"
+    H.write(dir .. "/.git/HEAD", { "ref: refs/heads/main" })
+    H.write(dir .. "/src/main/java/com/example/Probe.java", { "class Probe {}" })
+    H.write(above .. "/pom.xml", {
+      "<project><dependencies><dependency>",
+      "  <groupId>org.springframework.boot</groupId>",
+      "</dependency></dependencies></project>",
+    })
+
+    assert.equals(0, gate_java(dir).count)
+    assert.equals(1, vim.fn.filereadable(above .. "/pom.xml"))
+  end)
+
+  it("reads a parent module's pom.xml in a multi-module build", function()
+    if skip_reason then return H.skip(skip_reason) end
+
+    -- The other half of the same bound. It stops at the VCS root rather than at
+    -- the nearest build file, so a module that inherits spring-boot from its
+    -- parent POM — the normal shape of a multi-module Maven project — is still
+    -- recognised. Bounding at the module (as an unbounded-then-nearest search
+    -- effectively did) meant boot-ls never started for any of them.
+    local dir = H.tmpdir("spring-multimodule")
+    H.write(dir .. "/.git/HEAD", { "ref: refs/heads/main" })
+    H.write(dir .. "/pom.xml", {
+      "<project><dependencies><dependency>",
+      "  <groupId>org.springframework.boot</groupId>",
+      "</dependency></dependencies></project>",
+    })
+    -- The module's own POM says nothing about Spring; only the parent does.
+    H.write(dir .. "/service/pom.xml", { "<project><artifactId>service</artifactId></project>" })
+    local buf = quiet_buffer(dir .. "/service/src/main/java/com/example/Probe.java", "java")
+    local starts = capture_starts()
+    gate_callback("java")({ buf = buf })
+
+    assert.equals(1, starts.count)
+    assert.equals("spring-boot", starts[1][1].name)
+  end)
+
   it("does not gate yaml/jproperties on the Spring check", function()
     if skip_reason then return H.skip(skip_reason) end
 

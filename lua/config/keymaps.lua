@@ -13,10 +13,10 @@ map("t", "<C-k>", "<C-\\><C-n><C-w>k", { desc = "Window up (from terminal)" })
 map("t", "<C-l>", "<C-\\><C-n><C-w>l", { desc = "Window right (from terminal)" })
 
 -- ── Resize splits (Ctrl + arrow keys) ─────────────────────────────────────
-map("n", "<C-Up>",    ":resize +2<CR>",          { silent = true })
-map("n", "<C-Down>",  ":resize -2<CR>",          { silent = true })
-map("n", "<C-Left>",  ":vertical resize -2<CR>", { silent = true })
-map("n", "<C-Right>", ":vertical resize +2<CR>", { silent = true })
+map("n", "<C-Up>",    ":resize +2<CR>",          { silent = true, desc = "Resize split taller" })
+map("n", "<C-Down>",  ":resize -2<CR>",          { silent = true, desc = "Resize split shorter" })
+map("n", "<C-Left>",  ":vertical resize -2<CR>", { silent = true, desc = "Resize split narrower" })
+map("n", "<C-Right>", ":vertical resize +2<CR>", { silent = true, desc = "Resize split wider" })
 
 -- ── File explorer ──────────────────────────────────────────────────────────
 -- overrides: C-e (scroll 1 line) — use C-d/C-u for scrolling instead
@@ -141,10 +141,10 @@ map("n", "<M-j>", ":m .+1<CR>==", { silent = true, desc = "Move line down" })
 map("n", "<M-k>", ":m .-2<CR>==", { silent = true, desc = "Move line up" })
 
 -- Scroll and keep cursor centred
-map("n", "<C-d>", "<C-d>zz")
-map("n", "<C-u>", "<C-u>zz")
-map("n", "n", "nzzzv")
-map("n", "N", "Nzzzv")
+map("n", "<C-d>", "<C-d>zz", { desc = "Scroll down, cursor centred" })
+map("n", "<C-u>", "<C-u>zz", { desc = "Scroll up, cursor centred" })
+map("n", "n", "nzzzv", { desc = "Next search match, centred" })
+map("n", "N", "Nzzzv", { desc = "Prev search match, centred" })
 
 -- Paste over selection without losing yanked text
 map("x", "<C-S-p>", '"_dP', { desc = "Paste without overwriting register" })
@@ -170,11 +170,18 @@ map("n", "<C-/>", comment_line,    { desc = "Toggle comment" })
 map("x", "<C-/>", comment_visual,  { desc = "Toggle comment" })
 
 -- Clear search highlight
-map("n", "<Esc>", ":nohlsearch<CR>", { silent = true })
+map("n", "<Esc>", ":nohlsearch<CR>", { silent = true, desc = "Clear search highlight" })
 
 -- ── Logs / Diagnostics ────────────────────────────────────────────────────
--- LSP log: warnings/errors from language servers
-map("n", "<F1>", "<cmd>LspLog<CR>", { desc = "Open LSP log" })
+-- LSP log: warnings/errors from language servers.
+-- NOT `:LspLog`. nvim-lspconfig's plugin/lspconfig.lua returns early when `:lsp`
+-- already exists, and Neovim 0.12 ships it — so lspconfig registers no Lsp*
+-- command at all and <F1> raised E492. 0.12's own `:lsp` only takes
+-- enable/disable/restart/stop, with no log subcommand, so open the file itself.
+-- (`:checkhealth vim.lsp` is what replaced `:LspInfo`.)
+map("n", "<F1>", function()
+  vim.cmd("edit " .. vim.fn.fnameescape(vim.lsp.log.get_filename()))
+end, { desc = "Open LSP log" })
 -- Notification history: browse past notifications in Telescope
 map("n", "<C-S-n>", "<cmd>Telescope notify<CR>", { desc = "Notification history" })
 -- Neovim runtime log

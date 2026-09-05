@@ -488,25 +488,23 @@ describe("config.autocmds", function()
       assert.equals("p", mkdirs[1][2])
     end)
 
-    it("feeds a URL-style buffer name straight to mkdir (known bug)", function()
-      -- KNOWN BUG, reported rather than fixed here: the callback has no URL
-      -- guard, so a plugin buffer named like a URL (oil://, fugitive://,
-      -- term://) makes it mkdir a *cwd-relative* junk tree — `./oil:/tmp/foo`
-      -- under wherever nvim was started, i.e. inside whatever project you are
-      -- editing.
+    it("ignores a URL-style plugin buffer instead of feeding it to mkdir", function()
+      -- Without the buftype guard the callback had no idea this was not a path:
+      -- fnamemodify(":p:h") leaves a URL alone, so mkdir got the *relative*
+      -- string "oil:///tmp/..." and created a junk tree `./oil:/tmp/...` under
+      -- wherever nvim was started — i.e. inside whatever project you were
+      -- editing. Every plugin-owned buffer has a non-empty buftype.
       --
-      -- vim.fn.mkdir is spied, not called, precisely so running this spec does
-      -- not litter the repo the spec lives in. The assertion records today's
-      -- behaviour; if a guard is added it should flip to mkdirs.count == 0.
+      -- vim.fn.mkdir is still spied rather than let through: if the guard ever
+      -- regresses, this spec must fail, not litter the repo it lives in.
       -- Deliberately not made current (H.scratch would): entering a buffer runs
       -- auto_reload's BufEnter, and this spec is about one BufWritePre callback.
       local buf = H.track_buf(vim.api.nvim_create_buf(true, true))
       vim.api.nvim_buf_set_name(buf, "oil:///tmp/nvim-ide-tests-oil/sub")
+      assert.is_true(vim.bo[buf].buftype ~= "", "precondition: plugin buffer has a buftype")
       local mkdirs = H.spy(vim.fn, "mkdir")
       vim.api.nvim_exec_autocmds("BufWritePre", { group = "auto_create_dir", buffer = buf })
-      assert.equals(1, mkdirs.count)
-      assert.equals("oil:///tmp/nvim-ide-tests-oil", mkdirs[1][1])
-      assert.is_false(vim.startswith(mkdirs[1][1], "/"))
+      assert.equals(0, mkdirs.count)
     end)
   end)
 

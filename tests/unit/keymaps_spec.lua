@@ -58,8 +58,9 @@ end
 -- Third field is a substring the mapping's `desc` must contain, or `false` for
 -- the mappings the config deliberately leaves undescribed. `false` is spelled
 -- out rather than omitted so that a mapping losing its desc is a failure and not
--- a silent gap; the five `false` entries are reported as a finding, not fixed
--- here, because touching the config is out of scope for this spec.
+-- a silent gap. There are currently none: the nine that used to be undescribed
+-- (split resize, centred scroll/search, <Esc>) have been given descs, since
+-- which-key is the only place a user discovers them.
 local MAPPINGS = {
   -- Window navigation. The terminal-mode copies exist so the same keys work
   -- from inside a toggleterm buffer; dropping them traps the cursor there.
@@ -73,10 +74,10 @@ local MAPPINGS = {
   { "t", "<C-l>", "Window right (from terminal)" },
 
   -- Split resize.
-  { "n", "<C-Up>", false },
-  { "n", "<C-Down>", false },
-  { "n", "<C-Left>", false },
-  { "n", "<C-Right>", false },
+  { "n", "<C-Up>", "Resize split taller" },
+  { "n", "<C-Down>", "Resize split shorter" },
+  { "n", "<C-Left>", "Resize split narrower" },
+  { "n", "<C-Right>", "Resize split wider" },
 
   -- File explorer.
   { "n", "<C-e>", "Toggle explorer" },
@@ -137,10 +138,10 @@ local MAPPINGS = {
   { "x", "K", "Move selection up" },
   { "n", "<M-j>", "Move line down" },
   { "n", "<M-k>", "Move line up" },
-  { "n", "<C-d>", false },
-  { "n", "<C-u>", false },
-  { "n", "n", false },
-  { "n", "N", false },
+  { "n", "<C-d>", "Scroll down, cursor centred" },
+  { "n", "<C-u>", "Scroll up, cursor centred" },
+  { "n", "n", "Next search match, centred" },
+  { "n", "N", "Prev search match, centred" },
   { "x", "<C-S-p>", "Paste without overwriting register" },
   { "n", "<C-y>", "Copy to system clipboard" },
   { "x", "<C-y>", "Copy to system clipboard" },
@@ -153,7 +154,7 @@ local MAPPINGS = {
   { "x", "<C-/>", "Toggle comment" },
 
   -- Search highlight.
-  { "n", "<Esc>", false },
+  { "n", "<Esc>", "Clear search highlight" },
 
   -- Logs.
   { "n", "<F1>", "Open LSP log" },

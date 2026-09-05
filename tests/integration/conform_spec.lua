@@ -66,6 +66,42 @@ describe("conform formatter selection", function()
       assert.same(GOOGLE_FALLBACK, selection_in("prettier-none"))
     end)
 
+    it("ignores a prettier config above the project's VCS root", function()
+      -- The whole-machine failure the search bound exists for. `.prettierrc` and
+      -- a package.json with a "prettier" key are dotfile-shaped things people
+      -- keep in $HOME; an unbounded upward walk found them from any project and
+      -- disabled the Google fallback everywhere, with nothing on screen to say
+      -- why. The fixture's own .git makes its parent the ceiling, and $HOME's
+      -- role in the real bug is what that parent stands in for here.
+      -- Built by hand rather than with H.fixture: the parent has to hold the
+      -- planted dotfiles, and H.fixture's parent is a temp directory shared with
+      -- every other fixture in the process.
+      local above = H.tmpdir("prettier-above")
+      local dir = above .. "/repo"
+      vim.fn.mkdir(dir .. "/.git", "p")
+      H.write(dir .. "/package.json", { '{ "name": "repo" }' })
+      H.write(above .. "/.prettierrc", { "{}" })
+      H.write(above .. "/package.json", { '{ "prettier": { "singleQuote": false } }' })
+
+      local bufnr = named_buffer(dir .. "/src/index.ts")
+      assert.same(GOOGLE_FALLBACK, conform.formatters_by_ft.typescript(bufnr))
+      -- Both really are one directory up, so the result cannot be an artefact of
+      -- a fixture that failed to write them.
+      assert.equals(1, vim.fn.filereadable(above .. "/.prettierrc"))
+      assert.equals(1, vim.fn.filereadable(above .. "/package.json"))
+    end)
+
+    it("finds a monorepo root's prettier config from a nested package", function()
+      -- The other half of the same bound: it is the VCS root's parent, not the
+      -- nearest package.json, precisely so a workspace package still inherits
+      -- the config at the repository root it belongs to.
+      local dir = H.fixture("prettier-none")
+      H.write(dir .. "/.prettierrc", { "{}" })
+      vim.fn.mkdir(dir .. "/packages/web/src", "p")
+      local bufnr = named_buffer(dir .. "/packages/web/src/index.ts")
+      assert.same(PROJECT_PRETTIER, conform.formatters_by_ft.typescript(bufnr))
+    end)
+
     it("never returns both prettier and the Google wrapper", function()
       -- stop_after_first makes conform run one formatter, but the two branches
       -- must also be mutually exclusive by name: prettier_google appends

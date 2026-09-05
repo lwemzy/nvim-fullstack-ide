@@ -137,12 +137,16 @@ return {
         ".prettierrc.json5", ".prettierrc.js", ".prettierrc.cjs", ".prettierrc.mjs",
         "prettier.config.js", "prettier.config.cjs", "prettier.config.mjs",
       }
+      -- Bounded: an unbounded upward search walks to /, so a single ~/.prettierrc
+      -- (or a "prettier" key in ~/package.json) would silently mark every JS/TS
+      -- project on the machine as having its own opinion and disable the Google
+      -- fallback everywhere. See lua/config/project.lua for the ceiling.
+      local project = require("config.project")
       local function has_prettier_config(bufnr)
-        local dirname = vim.fs.dirname(vim.api.nvim_buf_get_name(bufnr))
-        if vim.fs.find(prettier_config_files, { path = dirname, upward = true })[1] then
+        if project.find_upward(bufnr, prettier_config_files)[1] then
           return true
         end
-        local pkg = vim.fs.find("package.json", { path = dirname, upward = true })[1]
+        local pkg = project.find_upward(bufnr, "package.json")[1]
         if not pkg then return false end
         local ok, decoded = pcall(vim.json.decode, table.concat(vim.fn.readfile(pkg), "\n"))
         return ok and decoded.prettier ~= nil

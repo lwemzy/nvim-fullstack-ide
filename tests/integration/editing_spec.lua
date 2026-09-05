@@ -233,22 +233,25 @@ describe("auto-create-dir", function()
     assert.same({}, vim.fn.readdir(other))
   end)
 
-  -- KNOWN GAP, reported rather than fixed (this spec may not edit lua/):
   -- auto_create_dir runs for *every* BufWritePre, including buffers whose name
   -- is a URL a plugin owns (oil://, fugitive://, octo://). fnamemodify(":p:h")
   -- leaves a URL alone, and vim.fn.mkdir() then happily creates a directory
-  -- literally called "oil:" under the cwd — i.e. writing an oil.nvim buffer
-  -- litters the project root. Left pending so the intended behaviour is
-  -- recorded without asserting the current one.
-  pending("does not create a directory for a URL-ish buffer name", function()
+  -- literally called "oil:" under the cwd — writing an oil.nvim buffer used to
+  -- litter the project root. The callback now returns early on any non-empty
+  -- buftype, which every such plugin buffer has.
+  it("does not create a directory for a URL-ish buffer name", function()
     local sandbox = H.tmpdir("urlish")
     local cwd = vim.fn.getcwd()
+    -- A real acwrite buffer, not just the pattern: the guard reads
+    -- vim.bo[ev.buf].buftype, so ev.buf has to be the plugin-owned buffer.
+    local buf = H.track_buf(vim.api.nvim_create_buf(true, false))
+    vim.api.nvim_buf_set_name(buf, "oil:///" .. sandbox .. "/tree/leaf.txt")
+    vim.bo[buf].buftype = "acwrite"
+
     vim.cmd.lcd(sandbox)
-    vim.api.nvim_exec_autocmds("BufWritePre", {
-      group = "auto_create_dir",
-      pattern = "oil:///" .. sandbox .. "/tree/leaf.txt",
-    })
+    vim.api.nvim_exec_autocmds("BufWritePre", { group = "auto_create_dir", buffer = buf })
     vim.cmd.lcd(cwd)
+
     assert.same({}, vim.fn.readdir(sandbox))
   end)
 end)

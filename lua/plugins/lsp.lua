@@ -81,11 +81,27 @@ return {
       )
 
       -- ── Shared on_attach keymaps ────────────────────────────────────────
-      local function on_attach(client, bufnr)
+      -- opts.rerun / opts.hints_registered are set by the
+      -- client/registerCapability wrapper below; see the comment there.
+      local function on_attach(client, bufnr, opts)
+        opts = opts or {}
         local map = function(keys, func, desc)
           vim.keymap.set("n", keys, func, { buffer = bufnr, desc = desc })
         end
-        local caps = client.server_capabilities
+        -- client:supports_method(), NOT client.server_capabilities.<x>Provider.
+        -- The static table only holds what the server advertised in its
+        -- `initialize` response; anything registered later via
+        -- client/registerCapability never lands there (nvim keeps dynamic
+        -- registrations in a separate store that only supports_method consults).
+        -- jdtls advertises almost nothing at initialize and registers rename,
+        -- code action, references, inlay hints and friends dynamically once the
+        -- project has been imported — so gating on the static table meant
+        -- <leader>rn, <leader>ca and gr simply never appeared in a Java buffer.
+        -- Re-run from the client/registerCapability wrapper below (keymap.set
+        -- overwrites, so re-running on_attach is idempotent).
+        local function supports(method)
+          return client:supports_method(method, bufnr)
+        end
 
         map("gd",         "<cmd>Telescope lsp_definitions<CR>",    "Go to definition")
         map("K",          vim.lsp.buf.hover,                       "Hover docs")
@@ -95,19 +111,19 @@ return {
         map("]d", function() vim.diagnostic.jump({ count = 1,  float = true }) end, "Next diagnostic")
         map("<leader>d",  vim.diagnostic.open_float,               "Show diagnostic")
 
-        if caps.declarationProvider then
+        if supports("textDocument/declaration") then
           map("gD", vim.lsp.buf.declaration, "Go to declaration")
         end
-        if caps.referencesProvider then
+        if supports("textDocument/references") then
           map("gr", "<cmd>Telescope lsp_references<CR>", "Find references")
         end
-        if caps.implementationProvider then
+        if supports("textDocument/implementation") then
           map("gi", "<cmd>Telescope lsp_implementations<CR>", "Find implementations")
         end
-        if caps.typeDefinitionProvider then
+        if supports("textDocument/typeDefinition") then
           map("<leader>lt", "<cmd>Telescope lsp_type_definitions<CR>", "Type definition")
         end
-        if caps.signatureHelpProvider then
+        if supports("textDocument/signatureHelp") then
           map("<C-k>", vim.lsp.buf.signature_help, "Signature help")
           -- Insert mode too, because signature help is most useful *while* you
           -- are typing arguments. nvim 0.11+ ships insert-mode <C-S> as the
@@ -119,25 +135,36 @@ return {
           vim.keymap.set("i", "<M-k>", vim.lsp.buf.signature_help,
             { buffer = bufnr, desc = "Signature help" })
         end
-        if caps.renameProvider then
+        if supports("textDocument/rename") then
           map("<leader>rn", vim.lsp.buf.rename, "Rename symbol")
         end
-        if caps.codeActionProvider then
+        if supports("textDocument/codeAction") then
           map("<leader>ca", vim.lsp.buf.code_action, "Code action")
         end
-        if caps.documentSymbolProvider then
+        if supports("textDocument/documentSymbol") then
           map("<leader>ls", "<cmd>Telescope lsp_document_symbols<CR>", "Document symbols")
         end
-        if caps.workspaceSymbolProvider then
+        if supports("workspace/symbol") then
           map("<leader>lw", "<cmd>Telescope lsp_dynamic_workspace_symbols<CR>", "Workspace symbols")
         end
-        if caps.inlayHintProvider then
-          vim.lsp.inlay_hint.enable(true, { bufnr = bufnr })
+        if supports("textDocument/inlayHint") then
+          -- enable(true) both switches hints on for the buffer and drops the
+          -- stored ones so they are re-requested from every current provider.
+          -- On a re-run that is only wanted when this registration actually
+          -- added a hint provider (otherwise every unrelated registration
+          -- re-requests every hint in the buffer) and only when hints are still
+          -- on — a re-run must not undo a <leader>uh toggle-off.
+          if
+            not opts.rerun
+            or (opts.hints_registered and vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }))
+          then
+            vim.lsp.inlay_hint.enable(true, { bufnr = bufnr })
+          end
           map("<leader>uh", function()
             vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }), { bufnr = bufnr })
           end, "Toggle inlay hints")
         end
-        if caps.callHierarchyProvider then
+        if supports("textDocument/prepareCallHierarchy") then
           -- Call hierarchy (who calls this / what does this call), quickfix-based
           -- since Telescope has no built-in call-hierarchy picker to route through.
           map("<leader>lc", vim.lsp.buf.incoming_calls, "Incoming calls (callers)")
@@ -247,36 +274,40 @@ return {
         return base_inlay_handler(err, result, ctx, cfg)
       end
 
-      -- Hints are only ever requested on didOpen / didChange / server refresh, and
-      -- inlay hints are NOT part of the vim.lsp._capability framework that
-      -- client/registerCapability re-attaches (handlers.lua:153-171 only re-runs
-      -- on_attach for registered *capabilities*). jdtls registers
-      -- textDocument/inlayHint dynamically — after its didOpen — so a freshly
-      -- opened Java buffer was never asked at all, and hints appeared only after
-      -- the first keystroke. Ask again the moment the registration lands.
+      -- A capability registered *after* initialize reaches nothing here on its
+      -- own. Neovim's client/registerCapability handler
+      -- (runtime/lua/vim/lsp/handlers.lua) stores the registration and re-attaches
+      -- its own internal vim.lsp._capability providers, but it does not fire
+      -- LspAttach again — so on_attach never sees the new capability. jdtls
+      -- advertises almost nothing at initialize and registers the rest once the
+      -- project is imported, which broke two things:
+      --   * the keymaps: <leader>rn, <leader>ca, gr and friends were gated on a
+      --     capability that only ever arrives dynamically, so in a Java buffer
+      --     they were never created at all;
+      --   * inlay hints: they are only requested on didOpen / didChange / server
+      --     refresh, and jdtls registers textDocument/inlayHint after its didOpen,
+      --     so a freshly opened buffer was never asked and hints appeared only
+      --     after the first keystroke.
+      -- Re-running on_attach fixes both — keymap.set overwrites, so it is
+      -- idempotent — and it re-requests the hints for the buffer.
       local base_register = vim.lsp.handlers["client/registerCapability"]
       vim.lsp.handlers["client/registerCapability"] = function(err, params, ctx, cfg)
+        -- base_register first: it is what stores the registrations that
+        -- client:supports_method() then reads.
         local res = base_register(err, params, ctx, cfg)
 
-        local registers_hints = false
+        local hints_registered = false
         for _, reg in ipairs(params and params.registrations or {}) do
-          if reg.method == "textDocument/inlayHint" then registers_hints = true end
+          if reg.method == "textDocument/inlayHint" then hints_registered = true end
         end
-        if registers_hints then
-          local client = vim.lsp.get_client_by_id(ctx.client_id)
-          for bufnr in pairs(client and client.attached_buffers or {}) do
-            vim.schedule(function()
-              -- enable(true) runs the internal _enable(), which drops the stored
-              -- hints for the buffer and re-requests from every current provider —
-              -- this client now among them.
-              if
-                vim.api.nvim_buf_is_loaded(bufnr)
-                and vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr })
-              then
-                vim.lsp.inlay_hint.enable(true, { bufnr = bufnr })
-              end
-            end)
-          end
+
+        local client = vim.lsp.get_client_by_id(ctx.client_id)
+        for bufnr in pairs(client and client.attached_buffers or {}) do
+          vim.schedule(function()
+            if vim.api.nvim_buf_is_loaded(bufnr) then
+              on_attach(client, bufnr, { rerun = true, hints_registered = hints_registered })
+            end
+          end)
         end
         return res
       end
