@@ -81,8 +81,31 @@ return {
       )
 
       -- ── Shared on_attach keymaps ────────────────────────────────────────
-      -- opts.rerun / opts.hints_registered are set by the
-      -- client/registerCapability wrapper below; see the comment there.
+      -- Buffers whose inlay hints on_attach has already switched on, so that a
+      -- re-run can tell "hints were never enabled here" (enable them) from "the
+      -- user turned them off with <leader>uh" (leave them off). is_enabled()
+      -- alone cannot: it is false in both cases. Cleared with the buffer by
+      -- hint_augroup below, because bufnrs are recycled.
+      local hints_initialised = {}
+
+      --- Does ANY client attached to bufnr support `method`, ignoring `except`?
+      ---
+      --- The predicate for removing a mapping, which is not the negation of the
+      --- one for adding it: mappings are per-buffer but capabilities are
+      --- per-client, so eslint (which advertises very little) must not be able to
+      --- take away what ts_ls installed on the same buffer.
+      ---
+      --- `except` is a client id to skip, for LspDetach: a detaching client is
+      --- still listed by get_clients() while the event runs.
+      local function any_client_supports(bufnr, method, except)
+        for _, c in ipairs(vim.lsp.get_clients({ bufnr = bufnr })) do
+          if c.id ~= except and c:supports_method(method, bufnr) then return true end
+        end
+        return false
+      end
+
+      -- opts.rerun / opts.hints_registered are set by the capability
+      -- registration wrappers below; see the comment there.
       local function on_attach(client, bufnr, opts)
         opts = opts or {}
         local map = function(keys, func, desc)
@@ -97,10 +120,27 @@ return {
         -- code action, references, inlay hints and friends dynamically once the
         -- project has been imported — so gating on the static table meant
         -- <leader>rn, <leader>ca and gr simply never appeared in a Java buffer.
-        -- Re-run from the client/registerCapability wrapper below (keymap.set
-        -- overwrites, so re-running on_attach is idempotent).
+        -- Re-run from the registration wrappers below (keymap.set overwrites, so
+        -- re-running on_attach is idempotent).
         local function supports(method)
           return client:supports_method(method, bufnr)
+        end
+
+        --- Map `lhs` while the method is supported, and unmap it once it is not.
+        ---
+        --- The unmap half is for client/unregisterCapability: gating on dynamic
+        --- state means the answer can go from yes back to no, and a mapping left
+        --- behind is the "present but dead" case — pressing it just reports
+        --- "server does not support …", which is exactly the state a *missing*
+        --- mapping would have told you about honestly. pcall because deleting a
+        --- mapping that was never set raises E31, which is the normal case on a
+        --- first attach.
+        local function gate(mode, lhs, rhs, method, desc)
+          if supports(method) then
+            vim.keymap.set(mode, lhs, rhs, { buffer = bufnr, desc = desc })
+          elseif not any_client_supports(bufnr, method) then
+            pcall(vim.keymap.del, mode, lhs, { buffer = bufnr })
+          end
         end
 
         map("gd",         "<cmd>Telescope lsp_definitions<CR>",    "Go to definition")
@@ -111,64 +151,73 @@ return {
         map("]d", function() vim.diagnostic.jump({ count = 1,  float = true }) end, "Next diagnostic")
         map("<leader>d",  vim.diagnostic.open_float,               "Show diagnostic")
 
-        if supports("textDocument/declaration") then
-          map("gD", vim.lsp.buf.declaration, "Go to declaration")
-        end
-        if supports("textDocument/references") then
-          map("gr", "<cmd>Telescope lsp_references<CR>", "Find references")
-        end
-        if supports("textDocument/implementation") then
-          map("gi", "<cmd>Telescope lsp_implementations<CR>", "Find implementations")
-        end
-        if supports("textDocument/typeDefinition") then
-          map("<leader>lt", "<cmd>Telescope lsp_type_definitions<CR>", "Type definition")
-        end
-        if supports("textDocument/signatureHelp") then
-          map("<C-k>", vim.lsp.buf.signature_help, "Signature help")
-          -- Insert mode too, because signature help is most useful *while* you
-          -- are typing arguments. nvim 0.11+ ships insert-mode <C-S> as the
-          -- default for this, but keymaps.lua binds <C-s> to save in insert mode
-          -- (Ctrl+S is the same keycode regardless of case), which silently took
-          -- it away. <M-k> rather than insert <C-k>: cmp already owns insert
-          -- <C-k> for select_prev_item, and a buffer-local mapping here would
-          -- shadow cmp's global one and break menu navigation.
-          vim.keymap.set("i", "<M-k>", vim.lsp.buf.signature_help,
-            { buffer = bufnr, desc = "Signature help" })
-        end
-        if supports("textDocument/rename") then
-          map("<leader>rn", vim.lsp.buf.rename, "Rename symbol")
-        end
-        if supports("textDocument/codeAction") then
-          map("<leader>ca", vim.lsp.buf.code_action, "Code action")
-        end
-        if supports("textDocument/documentSymbol") then
-          map("<leader>ls", "<cmd>Telescope lsp_document_symbols<CR>", "Document symbols")
-        end
-        if supports("workspace/symbol") then
-          map("<leader>lw", "<cmd>Telescope lsp_dynamic_workspace_symbols<CR>", "Workspace symbols")
-        end
+        gate("n", "gD", vim.lsp.buf.declaration,
+          "textDocument/declaration", "Go to declaration")
+        gate("n", "gr", "<cmd>Telescope lsp_references<CR>",
+          "textDocument/references", "Find references")
+        gate("n", "gi", "<cmd>Telescope lsp_implementations<CR>",
+          "textDocument/implementation", "Find implementations")
+        gate("n", "<leader>lt", "<cmd>Telescope lsp_type_definitions<CR>",
+          "textDocument/typeDefinition", "Type definition")
+        gate("n", "<C-k>", vim.lsp.buf.signature_help,
+          "textDocument/signatureHelp", "Signature help")
+        -- Insert mode too, because signature help is most useful *while* you are
+        -- typing arguments. nvim 0.11+ ships insert-mode <C-S> as the default for
+        -- this, but keymaps.lua binds <C-s> to save in insert mode (Ctrl+S is the
+        -- same keycode regardless of case), which silently took it away. <M-k>
+        -- rather than insert <C-k>: cmp already owns insert <C-k> for
+        -- select_prev_item, and a buffer-local mapping here would shadow cmp's
+        -- global one and break menu navigation.
+        gate("i", "<M-k>", vim.lsp.buf.signature_help,
+          "textDocument/signatureHelp", "Signature help")
+        gate("n", "<leader>rn", vim.lsp.buf.rename,
+          "textDocument/rename", "Rename symbol")
+        gate("n", "<leader>ca", vim.lsp.buf.code_action,
+          "textDocument/codeAction", "Code action")
+        gate("n", "<leader>ls", "<cmd>Telescope lsp_document_symbols<CR>",
+          "textDocument/documentSymbol", "Document symbols")
+        gate("n", "<leader>lw", "<cmd>Telescope lsp_dynamic_workspace_symbols<CR>",
+          "workspace/symbol", "Workspace symbols")
+        -- Call hierarchy (who calls this / what does this call), quickfix-based
+        -- since Telescope has no built-in call-hierarchy picker to route through.
+        gate("n", "<leader>lc", vim.lsp.buf.incoming_calls,
+          "textDocument/prepareCallHierarchy", "Incoming calls (callers)")
+        gate("n", "<leader>lC", vim.lsp.buf.outgoing_calls,
+          "textDocument/prepareCallHierarchy", "Outgoing calls (callees)")
+
+        gate("n", "<leader>uh", function()
+          vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }), { bufnr = bufnr })
+        end, "textDocument/inlayHint", "Toggle inlay hints")
         if supports("textDocument/inlayHint") then
           -- enable(true) both switches hints on for the buffer and drops the
           -- stored ones so they are re-requested from every current provider.
-          -- On a re-run that is only wanted when this registration actually
-          -- added a hint provider (otherwise every unrelated registration
-          -- re-requests every hint in the buffer) and only when hints are still
-          -- on — a re-run must not undo a <leader>uh toggle-off.
-          if
-            not opts.rerun
-            or (opts.hints_registered and vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }))
-          then
+          --
+          -- Three cases, and they need telling apart:
+          --
+          -- 1. Hints have never been on for this buffer → enable them. That first
+          --    time is often a re-run rather than the attach, because jdtls only
+          --    registers textDocument/inlayHint after its didOpen, so at LspAttach
+          --    there is nothing to enable yet.
+          -- 2. A hint provider has just joined a buffer whose hints are on (this
+          --    attach, or a registration that added the capability) → re-request,
+          --    so the newcomer gets asked and the ownership rule in the
+          --    textDocument/inlayHint handler below can re-decide who wins. Without
+          --    this a higher-ranked server that attaches second never supplies a
+          --    single hint.
+          -- 3. Anything else — an unrelated registration, or a re-run for a client
+          --    that was already a provider → leave it alone. Otherwise hints are
+          --    re-requested for the whole buffer on every registration jdtls makes.
+          --
+          -- Cases 2 and 3 both check is_enabled: a re-request must never undo a
+          -- <leader>uh toggle-off, which is why case 1 cannot just use is_enabled
+          -- (that is false both before the first enable and after a toggle-off).
+          local joined = not opts.rerun or opts.hints_registered
+          if not hints_initialised[bufnr] then
+            hints_initialised[bufnr] = true
+            vim.lsp.inlay_hint.enable(true, { bufnr = bufnr })
+          elseif joined and vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }) then
             vim.lsp.inlay_hint.enable(true, { bufnr = bufnr })
           end
-          map("<leader>uh", function()
-            vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }), { bufnr = bufnr })
-          end, "Toggle inlay hints")
-        end
-        if supports("textDocument/prepareCallHierarchy") then
-          -- Call hierarchy (who calls this / what does this call), quickfix-based
-          -- since Telescope has no built-in call-hierarchy picker to route through.
-          map("<leader>lc", vim.lsp.buf.incoming_calls, "Incoming calls (callers)")
-          map("<leader>lC", vim.lsp.buf.outgoing_calls, "Outgoing calls (callees)")
         end
       end
 
@@ -290,6 +339,41 @@ return {
       --     after the first keystroke.
       -- Re-running on_attach fixes both — keymap.set overwrites, so it is
       -- idempotent — and it re-requests the hints for the buffer.
+      --
+      -- client/unregisterCapability is wrapped for the same reason in the other
+      -- direction: the answer can go from yes back to no, and on_attach's `gate`
+      -- takes the mapping away again.
+
+      --- Pending re-runs, keyed "client_id:bufnr" -> { client, bufnr, hints }.
+      ---
+      --- Coalescing, not bookkeeping for its own sake: a server sends its
+      --- registrations in a burst (jdtls sends several, ts_ls and eslint register
+      --- didChangeWatchedFiles and executeCommand at startup), and most of them
+      --- gate nothing here. Without this, every one of them costs a full
+      --- supports_method sweep plus ~14 keymap calls for every buffer the client
+      --- is attached to. Collapsing per tick makes that one sweep per buffer.
+      local rerun_pending = {}
+
+      local function queue_rerun(client, hints_registered)
+        for bufnr in pairs(client.attached_buffers or {}) do
+          local key = client.id .. ":" .. bufnr
+          local queued = rerun_pending[key]
+          if queued then
+            -- A later registration in the same burst may be the hint one.
+            queued.hints = queued.hints or hints_registered
+          else
+            rerun_pending[key] = { client = client, bufnr = bufnr, hints = hints_registered }
+            vim.schedule(function()
+              local entry = rerun_pending[key]
+              rerun_pending[key] = nil
+              if entry and vim.api.nvim_buf_is_loaded(entry.bufnr) then
+                on_attach(entry.client, entry.bufnr, { rerun = true, hints_registered = entry.hints })
+              end
+            end)
+          end
+        end
+      end
+
       local base_register = vim.lsp.handlers["client/registerCapability"]
       vim.lsp.handlers["client/registerCapability"] = function(err, params, ctx, cfg)
         -- base_register first: it is what stores the registrations that
@@ -302,23 +386,29 @@ return {
         end
 
         local client = vim.lsp.get_client_by_id(ctx.client_id)
-        for bufnr in pairs(client and client.attached_buffers or {}) do
-          vim.schedule(function()
-            if vim.api.nvim_buf_is_loaded(bufnr) then
-              on_attach(client, bufnr, { rerun = true, hints_registered = hints_registered })
-            end
-          end)
-        end
+        if client then queue_rerun(client, hints_registered) end
+        return res
+      end
+
+      local base_unregister = vim.lsp.handlers["client/unregisterCapability"]
+      vim.lsp.handlers["client/unregisterCapability"] = function(err, params, ctx, cfg)
+        local res = base_unregister(err, params, ctx, cfg)
+        local client = vim.lsp.get_client_by_id(ctx.client_id)
+        -- hints_registered stays false: an unregistration is never a reason to
+        -- re-request hints, and on_attach's gate only ever removes here.
+        if client then queue_rerun(client, false) end
         return res
       end
 
       local hint_augroup = vim.api.nvim_create_augroup("user_inlay_hint_owner", { clear = true })
 
-      -- bufnrs are recycled, so ownership must not outlive the buffer.
+      -- bufnrs are recycled, so neither ownership nor "hints have been switched on
+      -- here once" may outlive the buffer.
       vim.api.nvim_create_autocmd({ "BufWipeout", "BufDelete" }, {
         group = hint_augroup,
         callback = function(ev)
           hint_owner[ev.buf] = nil
+          hints_initialised[ev.buf] = nil
         end,
       })
 
@@ -331,6 +421,17 @@ return {
       vim.api.nvim_create_autocmd("LspDetach", {
         group = hint_augroup,
         callback = function(ev)
+          -- Neovim's own LspDetach handler switches inlay hints off for the buffer
+          -- once no attached client supports them (runtime inlay_hint.lua:301-312).
+          -- That is a state reset, not a <leader>uh toggle-off, so the "already
+          -- initialised" sentinel has to be reset with it — otherwise a
+          -- replacement client (:LspRestart hands the same server a NEW client_id)
+          -- attaches to a buffer that counts as initialised but has hints off, and
+          -- nothing ever turns them back on.
+          if not any_client_supports(ev.buf, "textDocument/inlayHint", ev.data.client_id) then
+            hints_initialised[ev.buf] = nil
+          end
+
           if hint_owner[ev.buf] ~= ev.data.client_id then return end
           hint_owner[ev.buf] = nil
           if

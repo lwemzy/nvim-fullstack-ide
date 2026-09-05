@@ -173,18 +173,32 @@ map("x", "<C-/>", comment_visual,  { desc = "Toggle comment" })
 map("n", "<Esc>", ":nohlsearch<CR>", { silent = true, desc = "Clear search highlight" })
 
 -- ── Logs / Diagnostics ────────────────────────────────────────────────────
+-- A log is a live-appended file this config's own autocmds would otherwise treat
+-- as source code: auto-save writes any modified buffer with an empty buftype on
+-- BufLeave, so one stray keystroke in a multi-megabyte log would be written back
+-- over the file Neovim is still appending to. readonly + nomodifiable makes that
+-- impossible (auto-save only writes `modified` buffers), and auto-reload's
+-- checktime then keeps the view current as new lines arrive.
+--
+-- In a new tab because these are consulted *about* what you were doing: `:edit`
+-- replaced the file you were working in, which is also why nvim-lspconfig's own
+-- :LspLog used tabnew.
+local function open_log(path)
+  vim.cmd("tabnew " .. vim.fn.fnameescape(path))
+  vim.bo.readonly = true
+  vim.bo.modifiable = false
+end
+
 -- LSP log: warnings/errors from language servers.
 -- NOT `:LspLog`. nvim-lspconfig's plugin/lspconfig.lua returns early when `:lsp`
 -- already exists, and Neovim 0.12 ships it — so lspconfig registers no Lsp*
 -- command at all and <F1> raised E492. 0.12's own `:lsp` only takes
 -- enable/disable/restart/stop, with no log subcommand, so open the file itself.
 -- (`:checkhealth vim.lsp` is what replaced `:LspInfo`.)
-map("n", "<F1>", function()
-  vim.cmd("edit " .. vim.fn.fnameescape(vim.lsp.log.get_filename()))
-end, { desc = "Open LSP log" })
+map("n", "<F1>", function() open_log(vim.lsp.log.get_filename()) end, { desc = "Open LSP log" })
 -- Notification history: browse past notifications in Telescope
 map("n", "<C-S-n>", "<cmd>Telescope notify<CR>", { desc = "Notification history" })
 -- Neovim runtime log
 map("n", "<C-S-l>", function()
-  vim.cmd("edit " .. vim.fn.stdpath("log") .. "/nvim.log")
+  open_log(vim.fn.stdpath("log") .. "/nvim.log")
 end, { desc = "Open Neovim log" })

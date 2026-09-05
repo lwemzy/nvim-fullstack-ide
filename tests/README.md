@@ -190,6 +190,21 @@ Conventions worth following:
   resolved per-server config instead of on `initialize` params.
 - **`:w` on a file that changed on disk prompts** (`W12`) and hangs the run. Use
   `:w!`, or assert the ex-command rather than performing the write.
+- **`vim.fs.find` searches the starting directory *before* it starts comparing
+  parents against `stop`**, and the comparison is raw string equality against
+  `vim.fs.dirname`-normalised paths. So a bound only bites when both sides are
+  normalised and symlink-resolved the same way (macOS's `/var` is really
+  `/private/var`, and `fs_realpath` returns nil for a directory that does not
+  exist yet), and the starting directory needs a guard of its own.
+- **nvim switches inlay hints off itself on `LspDetach`** once no attached client
+  supports them (`runtime/lua/vim/lsp/inlay_hint.lua`). Any per-buffer state a
+  config keeps alongside that has to be reset with it.
+- **A `workspace/didChangeWatchedFiles` registration needs `registerOptions`** —
+  nvim's handler dereferences it, so a bare `{ id, method }` from `fake_lsp`
+  errors. Use a method nothing internal handles when you just need filler.
+- **`vim.tbl_filter` iterates with `pairs`**, and `H.spy`'s log carries a
+  non-integer `original` key — so the predicate gets handed a function. Count a
+  spy log with `ipairs`.
 
 ## Config bugs these tests found
 
@@ -202,8 +217,11 @@ ones that would fail if it came back.
   nvim-lspconfig's `plugin/lspconfig.lua` returns early when `:lsp` exists, so it
   registers no `Lsp*` command at all, and 0.12's own `:lsp` takes only
   `enable|disable|restart|stop` — there is no `log` subcommand. It now opens
-  `vim.lsp.log.get_filename()` directly. (`:checkhealth vim.lsp` replaced
-  `:LspInfo`.) — `keymaps_spec`, `plugins_load_spec`
+  `vim.lsp.log.get_filename()` directly, in a new tab and `readonly` +
+  `nomodifiable` — auto-save writes any modified normal buffer on `BufLeave`, so
+  one stray keystroke in a log would be written back over the file the server is
+  still appending to. (`:checkhealth vim.lsp` replaced `:LspInfo`.) —
+  `keymaps_spec`, `plugins_load_spec`
 - `auto_create_dir` fed URL-ish buffer names straight to `mkdir`, creating a
   cwd-relative junk tree (`./oil:/tmp/...`) whenever an `oil://`/`fugitive://`
   buffer was written. It now returns early on any non-empty `buftype`. —
@@ -222,6 +240,37 @@ ones that would fail if it came back.
   from the `client/registerCapability` wrapper. — `lsp_attach_spec`
 - Nine mappings in `config/keymaps.lua` had no `desc` (split resize, centred
   scroll/search, `<Esc>`), so which-key showed them unlabelled. — `keymaps_spec`
+
+### Found by code review of those fixes, fixed and pinned here
+
+The first round of fixes above introduced or left these; the specs named are the
+ones that fail if they come back.
+
+- `on_attach` only ever *added* a capability-gated mapping, so
+  `client/unregisterCapability` left a dead key behind — pressing it reported
+  "server does not support …", which is what a *missing* mapping would have said
+  honestly. The handler is now wrapped in both directions, and the removal
+  predicate ignores capabilities another attached client still answers. —
+  `lsp_attach_spec`
+- The inlay-hint re-enable inferred "hints were never on here" from
+  `is_enabled()`, which is equally false after a `<leader>uh` toggle-off — so
+  every later jdtls registration switched them back on. `on_attach` now tracks
+  first-enable per buffer, re-requests only when a provider actually joins, and
+  resets that state when nvim's own `LspDetach` disable fires. —
+  `inlay_hint_spec`
+- A burst of registrations (jdtls sends several; ts_ls and eslint register two at
+  startup) re-ran `on_attach` once per registration — a full `supports_method`
+  sweep plus ~14 keymap calls each, per attached buffer. Now collapsed to one
+  re-run per buffer per tick. — `lsp_attach_spec`
+- `config.project` resolved symlinks in `$HOME` but not in the VCS root or the
+  buffer's own directory, and `vim.fs.find` compares `stop` by raw string
+  equality — so on macOS (`/var` → `/private/var`), for a project reached through
+  a symlink, or for a file in a directory that does not exist yet, the bound
+  matched nothing and the walk ran to `/` again. Every path now goes through one
+  `resolve()`. — `project_spec`, `conform_spec`
+- The prettier check read only the *nearest* `package.json`, so a monorepo
+  workspace package got the Google fallback while the repo root's `"prettier"`
+  key (and CI) said otherwise. — `conform_spec`
 
 ### Still pinned, deliberately not fixed
 

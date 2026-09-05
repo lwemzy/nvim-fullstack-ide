@@ -374,6 +374,91 @@ describe("lsp on_attach", function()
     assert.is_nil(buf_map("n", "gr", bufnr))
     assert.is_nil(buf_map("n", "<leader>uh", bufnr))
   end)
+
+  it("takes the mapping away again when the capability is unregistered", function()
+    -- Gating on dynamic state means the answer can go from yes back to no
+    -- (client/unregisterCapability), and a mapping left behind is the
+    -- present-but-dead case: pressing it only reports "server does not support
+    -- …", which is precisely what a *missing* mapping would have told you.
+    local srv = attach("fickle_ls", fake_lsp.caps.minimal)
+    srv.register({ { id = "1", method = "textDocument/codeAction" } })
+    H.wait_for("<leader>ca mapped", function()
+      return buf_map("n", "<leader>ca", bufnr) ~= nil
+    end)
+
+    srv.unregister({ { id = "1", method = "textDocument/codeAction" } })
+    H.wait_for("<leader>ca unmapped", function()
+      return buf_map("n", "<leader>ca", bufnr) == nil
+    end)
+
+    -- The unconditional maps are untouched: an unregistration re-runs on_attach,
+    -- it does not tear the buffer down.
+    assert.is_not_nil(buf_map("n", "K", bufnr))
+  end)
+
+  it("keeps the mapping when another attached client still supports it", function()
+    -- The removal predicate is not the negation of the one for adding: mappings
+    -- are per-buffer but capabilities are per-client. ts_ls + eslint on one
+    -- buffer is the everyday case, so one client dropping a capability must not
+    -- take away what the other still answers.
+    attach("full_ls", fake_lsp.caps.full)
+    local other = attach("dynamic_ls", fake_lsp.caps.minimal)
+    other.register({ { id = "1", method = "textDocument/codeAction" } })
+    H.wait_for("re-run after registration", function()
+      return other.client:supports_method("textDocument/codeAction", bufnr)
+    end)
+
+    other.unregister({ { id = "1", method = "textDocument/codeAction" } })
+    H.wait_for("re-run after unregistration", function()
+      return not other.client:supports_method("textDocument/codeAction", bufnr)
+    end)
+    -- Waited on the client's own state rather than on the mapping, because the
+    -- assertion here is that the mapping never went away — there is nothing to
+    -- wait for. Give the scheduled re-run a tick to have done its worst.
+    vim.wait(50)
+
+    assert.is_not_nil(buf_map("n", "<leader>ca", bufnr))
+  end)
+
+  it("collapses a burst of registrations into one re-run per buffer", function()
+    -- Servers register in bursts (jdtls sends several; ts_ls and eslint register
+    -- didChangeWatchedFiles and executeCommand at startup) and most of those
+    -- gate nothing here. One re-run per registration would cost a full
+    -- supports_method sweep plus ~14 keymap calls each, on every attached buffer.
+    local srv = attach("burst_ls", fake_lsp.caps.minimal)
+
+    -- K is the counter: on_attach sets it unconditionally, exactly once per run.
+    local original = vim.keymap.set
+    local sets = H.spy(vim.keymap, "set", original)
+    -- Counted with ipairs, not vim.tbl_filter: the spy's log carries a
+    -- non-integer `original` key that pairs() would hand the predicate.
+    local function runs()
+      local n = 0
+      for _, args in ipairs(sets) do
+        if args[2] == "K" and type(args[4]) == "table" and args[4].buffer == bufnr then
+          n = n + 1
+        end
+      end
+      return n
+    end
+
+    -- Same tick, three server_requests, two of them gating something. (The
+    -- filler methods are ones nothing here gates on, and specifically not
+    -- workspace/didChangeWatchedFiles — nvim's own handler for that one
+    -- dereferences registerOptions and would error on a bare registration.)
+    srv.register({
+      { id = "1", method = "textDocument/documentHighlight" },
+      { id = "2", method = "textDocument/codeAction" },
+    })
+    srv.register({ { id = "3", method = "textDocument/foldingRange" } })
+    srv.register({ { id = "4", method = "textDocument/rename" } })
+
+    H.wait_for("re-run ran", function() return runs() > 0 end)
+    -- Both capabilities from the burst landed, so the single sweep saw all of it.
+    assert.is_not_nil(buf_map("n", "<leader>ca", bufnr))
+    assert.is_not_nil(buf_map("n", "<leader>rn", bufnr))
+    assert.equals(1, runs())
+  end)
 end)
 
 describe("eslint on_attach chaining", function()

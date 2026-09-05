@@ -20,6 +20,18 @@ local function same_path(expected, actual)
   assert.equals(vim.uv.fs_realpath(expected), vim.uv.fs_realpath(actual))
 end
 
+--- Point $HOME at `dir` until cleanup.
+---
+--- vim.uv.os_homedir() reads $HOME on unix, so this is what makes the $HOME
+--- clamp testable at all: the real $HOME is an ancestor of nothing a spec can
+--- build, and the cases that matter (a dotfiles repo at $HOME, a loose file
+--- sitting directly in it) are exactly the ones that need $HOME to be somewhere
+--- writable.
+local function fake_home(dir)
+  H.stub(vim.env, "HOME", dir)
+  return dir
+end
+
 --- A repo-shaped tree: <root>/.git plus <sub> beneath it, and a buffer named
 --- after a file in <sub> (never loaded — the buffer *name* is the whole input).
 local function repo(label, sub)
@@ -72,6 +84,44 @@ describe("config.project", function()
       vim.fn.mkdir(inner .. "/src", "p")
       local bufnr = H.named_buf(inner .. "/src/file.txt")
       same_path(outer .. "/vendor", project.ceiling(bufnr))
+    end)
+
+    it("clamps to $HOME when $HOME is itself a VCS root", function()
+      -- A dotfiles repo (`git init` in $HOME) is a common setup, and the parent
+      -- of that root is the parent of $HOME — which puts $HOME *inside* the
+      -- searched range and hands every project under it the ~/.prettierrc and
+      -- ~/pom.xml this module exists to ignore.
+      local h = fake_home(H.tmpdir("home-is-repo"))
+      vim.fn.mkdir(h .. "/.git", "p")
+      vim.fn.mkdir(h .. "/project/src", "p")
+      local bufnr = H.named_buf(h .. "/project/src/file.txt")
+      same_path(h, project.ceiling(bufnr))
+    end)
+
+    it("clamps to $HOME when the VCS root is above $HOME", function()
+      -- `/` under version control, or $HOME inside a checkout. Comparing for
+      -- equality with $HOME alone would miss this and the clamp would not fire.
+      local container = H.tmpdir("repo-above-home")
+      vim.fn.mkdir(container .. "/.git", "p")
+      local h = fake_home(container .. "/home")
+      vim.fn.mkdir(h .. "/project", "p")
+      local bufnr = H.named_buf(h .. "/project/file.txt")
+      same_path(h, project.ceiling(bufnr))
+    end)
+
+    it("bounds at the outermost fallback marker when there is no VCS root", function()
+      -- A multi-module build with no version control and outside $HOME: nothing
+      -- else says where it begins, so without the fallback the search has no
+      -- bound whatsoever. The OUTERMOST marker wins so the parent module stays
+      -- readable from the child.
+      local container = H.tmpdir("fallback-outermost")
+      fake_home(H.tmpdir("fallback-elsewhere"))
+      local module = container .. "/outer/module"
+      vim.fn.mkdir(module .. "/src", "p")
+      H.write(container .. "/outer/pom.xml", { "<project/>" })
+      H.write(module .. "/pom.xml", { "<project/>" })
+      local bufnr = H.named_buf(module .. "/src/file.txt")
+      same_path(container, project.ceiling(bufnr, { "pom.xml" }))
     end)
   end)
 
@@ -143,6 +193,73 @@ describe("config.project", function()
     it("finds nothing when the file simply is not there", function()
       local _, bufnr = repo("up-absent", "src")
       assert.same({}, project.find_upward(bufnr, "pom.xml"))
+    end)
+
+    it("does not read $HOME's own config for a loose file in $HOME", function()
+      -- vim.fs.find tests `path` itself BEFORE it starts comparing parents
+      -- against `stop`, so the starting directory is searched even when it *is*
+      -- the ceiling. For a scratch file saved straight into $HOME that means
+      -- reading exactly the ~/.prettierrc the ceiling is there to exclude, and
+      -- the guard in find_upward is the only thing that prevents it.
+      local h = fake_home(H.tmpdir("home-loose"))
+      local marker = H.write(h .. "/.prettierrc", { "{}" })
+      local bufnr = H.named_buf(h .. "/Scratch.txt")
+      assert.same({}, project.find_upward(bufnr, ".prettierrc"))
+      assert.equals(1, vim.fn.filereadable(marker))
+    end)
+
+    it("keeps the bound when $HOME is unnormalised and reached by a symlink", function()
+      -- `stop` is compared against vim.fs.parents() output by raw string
+      -- equality, so a $HOME with a trailing slash or a symlinked component
+      -- matches no parent at all and the walk silently runs to `/` — the exact
+      -- unbounded behaviour this module exists to remove, with no visible cause.
+      local container = H.tmpdir("home-symlink")
+      local real = container .. "/real-home"
+      vim.fn.mkdir(real .. "/project", "p")
+      assert(vim.uv.fs_symlink(real, container .. "/link"))
+      fake_home(container .. "/link/") -- trailing slash AND a symlink
+
+      local above = H.write(container .. "/.prettierrc", { "{}" })
+      local bufnr = H.named_buf(real .. "/project/file.txt")
+      assert.same({}, project.find_upward(bufnr, ".prettierrc"))
+      assert.equals(1, vim.fn.filereadable(above))
+    end)
+
+    it("bounds a buffer whose directory does not exist yet", function()
+      -- `:e src/new/thing.ts` in a directory that has not been created (what
+      -- auto_create_dir in config/autocmds.lua exists for) names a path that
+      -- cannot be symlink-resolved, because it is not on disk. Leaving it
+      -- unresolved makes it incomparable with the resolved ceiling, and the bound
+      -- silently disappears for exactly those buffers.
+      local container = H.tmpdir("dir-missing")
+      local root = container .. "/repo"
+      vim.fn.mkdir(root .. "/.git", "p")
+      local above = H.write(container .. "/.prettierrc", { "{}" })
+      local bufnr = H.named_buf(root .. "/does/not/exist/file.txt")
+
+      assert.same({}, project.find_upward(bufnr, ".prettierrc"))
+      assert.equals(1, vim.fn.filereadable(above))
+
+      -- And the search still reaches the project itself, so the empty result
+      -- above is a bound and not a walk that never started.
+      local inside = H.write(root .. "/.prettierrc", { "{}" })
+      same_path(inside, assert(project.find_upward(bufnr, ".prettierrc")[1]))
+    end)
+
+    it("bounds a symlinked project path against the resolved ceiling", function()
+      -- The other side of the same coin: the ceiling resolves symlinks, so the
+      -- starting directory has to as well. A project opened through a symlinked
+      -- parent (macOS's /var -> /private/var, a checkout reached via a symlink)
+      -- otherwise produces parents that can never equal the bound.
+      local container = H.tmpdir("path-symlink")
+      local h = fake_home(container .. "/home")
+      vim.fn.mkdir(h .. "/project/src", "p")
+      assert(vim.uv.fs_symlink(h .. "/project", container .. "/link"))
+
+      local above = H.write(container .. "/.prettierrc", { "{}" })
+      local bufnr = H.named_buf(container .. "/link/src/file.txt")
+      assert.same({}, project.find_upward(bufnr, ".prettierrc"))
+      assert.equals(1, vim.fn.filereadable(above))
     end)
   end)
 end)

@@ -86,11 +86,15 @@ return {
       -- parent pom.xml declaring spring-boot (with the module inheriting it) was
       -- never read and boot-ls never started.
       local project = require("config.project")
+      local BUILD_FILES = { "pom.xml", "build.gradle", "build.gradle.kts" }
       local function is_spring_boot_project(bufnr)
+        -- The build files double as the fallback root markers: a Java project with
+        -- no version control has nothing else to say where it begins, and without
+        -- them the search is unbounded for one that also sits outside $HOME.
         local build_files = project.find_upward(
           bufnr,
-          { "pom.xml", "build.gradle", "build.gradle.kts" },
-          { limit = math.huge }
+          BUILD_FILES,
+          { limit = math.huge, fallback_markers = BUILD_FILES }
         )
         for _, f in ipairs(build_files) do
           local ok, lines = pcall(vim.fn.readfile, f)

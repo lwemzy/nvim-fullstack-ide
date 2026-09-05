@@ -142,14 +142,24 @@ return {
       -- project on the machine as having its own opinion and disable the Google
       -- fallback everywhere. See lua/config/project.lua for the ceiling.
       local project = require("config.project")
+      -- package.json is also the fallback root marker: with no .git/.hg/.svn it is
+      -- the only thing that says where a JS project begins, and without it the
+      -- search has no bound at all for a project outside $HOME.
+      local ROOT_MARKERS = { "package.json" }
       local function has_prettier_config(bufnr)
-        if project.find_upward(bufnr, prettier_config_files)[1] then
+        if project.find_upward(bufnr, prettier_config_files, { fallback_markers = ROOT_MARKERS })[1] then
           return true
         end
-        local pkg = project.find_upward(bufnr, "package.json")[1]
-        if not pkg then return false end
-        local ok, decoded = pcall(vim.json.decode, table.concat(vim.fn.readfile(pkg), "\n"))
-        return ok and decoded.prettier ~= nil
+        -- Every package.json up to the root, not just the nearest: in a monorepo
+        -- the workspace package usually has no "prettier" key and the repo root
+        -- does, and stopping at the nearest one would hand the whole workspace the
+        -- Google fallback while its own prettier config (and its CI) says otherwise.
+        for _, pkg in ipairs(project.find_upward(bufnr, "package.json",
+          { fallback_markers = ROOT_MARKERS, limit = math.huge })) do
+          local ok, decoded = pcall(vim.json.decode, table.concat(vim.fn.readfile(pkg), "\n"))
+          if ok and type(decoded) == "table" and decoded.prettier ~= nil then return true end
+        end
+        return false
       end
       local function prettier_or_none(bufnr)
         if has_prettier_config(bufnr) then

@@ -443,6 +443,58 @@ describe("config.keymaps", function()
     end)
   end)
 
+  describe("log buffers", function()
+    --- Press `lhs` and return the buffer it opened, asserting it landed in a new
+    --- tab. Tracked so cleanup wipes it, which closes the tab with it.
+    local function open(lhs)
+      local tabs = #vim.api.nvim_list_tabpages()
+      H.run_keymap("n", lhs)
+      assert.equals(tabs + 1, #vim.api.nvim_list_tabpages())
+      return H.track_buf(vim.api.nvim_get_current_buf())
+    end
+
+    --- The buffer's file, with both sides symlink-resolved (macOS's temp dir
+    --- lives behind /var -> /private/var).
+    local function opened_file(buf)
+      return vim.uv.fs_realpath(vim.api.nvim_buf_get_name(buf))
+    end
+
+    it("opens the LSP log in a new tab, read-only and unmodifiable", function()
+      -- readonly + nomodifiable is protection, not politeness: a log is a
+      -- live-appended file that auto_save (autocmds.lua) would treat as source
+      -- code, writing the whole buffer back on BufLeave over what the server is
+      -- still appending to. auto_save only writes `modified` buffers, and an
+      -- unmodifiable one can never become modified. The new tab matters too — a
+      -- log is consulted *about* what you were doing, so :edit would replace it.
+      local path = H.write(H.tmpdir("logs") .. "/lsp.log", { "[START][info] hello" })
+      H.stub(vim.lsp.log, "get_filename", function() return path end)
+
+      local buf = open("<F1>")
+      -- The path comes from vim.lsp.log.get_filename() and not from :LspLog:
+      -- nvim 0.12 ships its own :lsp, so nvim-lspconfig registers no Lsp*
+      -- command at all and the old <F1> raised E492 on every press.
+      assert.equals(vim.uv.fs_realpath(path), opened_file(buf))
+      assert.same({ "[START][info] hello" }, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+      assert.is_true(vim.bo[buf].readonly)
+      assert.is_false(vim.bo[buf].modifiable)
+      assert.is_false(vim.bo[buf].modified)
+    end)
+
+    it("opens the Neovim runtime log the same way", function()
+      local dir = H.tmpdir("logs")
+      local path = H.write(dir .. "/nvim.log", { "runtime log" })
+      local stdpath = vim.fn.stdpath
+      H.stub(vim.fn, "stdpath", function(what)
+        return what == "log" and dir or stdpath(what)
+      end)
+
+      local buf = open("<C-S-l>")
+      assert.equals(vim.uv.fs_realpath(path), opened_file(buf))
+      assert.is_true(vim.bo[buf].readonly)
+      assert.is_false(vim.bo[buf].modifiable)
+    end)
+  end)
+
   describe("module", function()
     it("can be loaded twice without error and keeps the same mappings", function()
       -- vim.keymap.set is idempotent, but a future guard clause or a

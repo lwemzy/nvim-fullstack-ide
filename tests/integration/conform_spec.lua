@@ -102,6 +102,21 @@ describe("conform formatter selection", function()
       assert.same(PROJECT_PRETTIER, conform.formatters_by_ft.typescript(bufnr))
     end)
 
+    it("reads a monorepo root's prettier key past the nearest package.json", function()
+      -- The package.json search asks for EVERY match up to the root, not just the
+      -- nearest. In a monorepo the workspace package has no "prettier" key and
+      -- the repo root does — and the nearest-match default would stop at the
+      -- workspace, hand the whole package --single-quote, and disagree with the
+      -- CI that runs prettier from the root config.
+      local dir = H.fixture("prettier-none")
+      H.write(dir .. "/package.json", { '{ "name": "root", "prettier": { "singleQuote": false } }' })
+      vim.fn.mkdir(dir .. "/packages/web/src", "p")
+      H.write(dir .. "/packages/web/package.json", { '{ "name": "web" }' })
+
+      local bufnr = named_buffer(dir .. "/packages/web/src/index.ts")
+      assert.same(PROJECT_PRETTIER, conform.formatters_by_ft.typescript(bufnr))
+    end)
+
     it("never returns both prettier and the Google wrapper", function()
       -- stop_after_first makes conform run one formatter, but the two branches
       -- must also be mutually exclusive by name: prettier_google appends

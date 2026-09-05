@@ -214,6 +214,56 @@ describe("inlay hint ownership", function()
     end)
   end)
 
+  -- The other half of that re-request, and the reason on_attach tracks "hints
+  -- have been switched on for this buffer" separately from is_enabled(): those
+  -- two states — never enabled yet, and deliberately switched off with
+  -- <leader>uh — look identical to is_enabled(), and the re-run must treat them
+  -- oppositely. Getting this wrong makes <leader>uh unusable in a Java buffer:
+  -- jdtls keeps registering capabilities, and each one turned the hints back on.
+  it("leaves hints off after a toggle-off when a later registration re-runs on_attach", function()
+    local srv = start_hinting_server("jdtls")
+    H.wait_for("hints stored", function()
+      return #hint_sources(bufnr) > 0
+    end)
+
+    -- What <leader>uh does (the mapping's own wiring is lsp_attach_spec's
+    -- subject; this is about what a re-run may not undo).
+    vim.lsp.inlay_hint.enable(false, { bufnr = bufnr })
+    assert.is_not_true(vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }))
+
+    -- An unrelated registration, which is the common case: nearly everything
+    -- jdtls registers has nothing to do with hints.
+    srv.register({ { id = "1", method = "textDocument/codeAction" } })
+    H.wait_for("on_attach re-ran", function()
+      return H.buf_keymap("n", "<leader>ca", bufnr) ~= nil
+    end)
+
+    assert.is_not_true(vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }))
+    assert.same({}, vim.lsp.inlay_hint.get({ bufnr = bufnr }))
+  end)
+
+  it("leaves hints off after a toggle-off when a second provider attaches", function()
+    -- An attaching hint provider IS a reason to re-request (that is how a
+    -- higher-ranked server gets asked at all), so this is the case where that
+    -- rule has to yield to the user's toggle.
+    start_hinting_server("spring-boot")
+    H.wait_for("hints stored", function()
+      return #hint_sources(bufnr) > 0
+    end)
+    vim.lsp.inlay_hint.enable(false, { bufnr = bufnr })
+
+    -- Deleting K first makes the second attach observable: on_attach sets it
+    -- unconditionally, so its reappearance means that callback has run.
+    vim.keymap.del("n", "K", { buffer = bufnr })
+    start_hinting_server("jdtls")
+    H.wait_for("jdtls's on_attach ran", function()
+      return H.buf_keymap("n", "K", bufnr) ~= nil
+    end)
+
+    assert.is_not_true(vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }))
+    assert.same({}, vim.lsp.inlay_hint.get({ bufnr = bufnr }))
+  end)
+
   it("releases ownership when the owning client detaches", function()
     local first = start_hinting_server("spring-boot")
     H.wait_for("first owns", function()
