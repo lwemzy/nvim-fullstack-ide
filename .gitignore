@@ -2,8 +2,10 @@
 lazy-lock.json
 
 # Compiled Lua cache
-lua/__pycache__/
 *.luac
+
+# Python bytecode — mcp/nvim_context_server.py, and py_compile in the test suite
+__pycache__/
 
 # Mason-installed binaries (reinstalled automatically)
 /mason/

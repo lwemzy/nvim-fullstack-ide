@@ -47,6 +47,12 @@ lazy.nvim's own merge and ordering rules and every plugin's `config` function
 are part of what is under test. Anything reconstructed by hand there would be
 testing a copy of the config instead of the config.
 
+The tier split is about plugins and language servers, not about staying in
+process: `mcp_server_spec` is a unit spec that runs `mcp/nvim_context_server.py`
+as a real subprocess, because the framing it has to get right (newline-delimited
+JSON, and *nothing else*, on stdout) is exactly what calling `handle()` directly
+would not check. What a unit spec must not do is need a plugin.
+
 One nvim process per spec file. These specs install autocmds, replace
 `vim.lsp.handlers` entries and start LSP clients; per-file isolation is what
 keeps a failure from depending on file order, and stops one hung server from
@@ -269,6 +275,52 @@ Conventions worth following:
   `after_each`, or the live job keeps the headless session alive.
 - **`vim.fn.jobwait({id}, 0)[1] == -1` means still running**; anything else (an
   exit code, or `-3` for an invalid id) means it has exited.
+- **A visual-mode Lua callback runs while visual mode is still active, so `'<`
+  and `'>` have not been written yet.** Measured through a real `x`-mode mapping:
+  `mode()` is `v`, and `getpos("'<")` and `getpos("'>")` are both `{0,0,0,0}`.
+  Read the live selection with
+  `vim.fn.getregion(vim.fn.getpos("v"), vim.fn.getpos("."), { type = vim.fn.mode() })`,
+  which also handles linewise/blockwise and multibyte text that `string.sub`
+  slicing cuts in half. This is why `claude_cli_spec` drives the visual commands
+  with `nvim_feedkeys` through a real mapping instead of `H.run_keymap`:
+  `run_keymap` calls the callback from normal mode, which is precisely the harness
+  artefact that hid the bug.
+- **Feeding a blockwise selection needs the `<C-v>` termcode, not a raw `\22`
+  byte.** A raw byte silently does not enter blockwise mode, the mapping never
+  fires, and the assertion then fails against whatever the previous case left
+  behind — which reads as a module bug.
+- **`vim.fn.termopen` and `vim.fn.jobstart` *throw* `E475: Invalid value for
+  argument cmd` for a missing binary**, they do not return `-1`. Any "the CLI
+  isn't installed" branch written around the exit code is unreachable, and a
+  buffer created before the call is orphaned by the throw.
+- **`nvim_win_close` on the only window throws `E444`.** Replacing the buffer is
+  the way to make that window stop showing what it was showing — but with an
+  explicitly created buffer, because **`:enew` reuses the current buffer when it
+  is already empty and unnamed** (measured: `nvim_win_get_buf` returned the same
+  bufnr afterwards), so `:enew` is not a reliable way to swap a buffer out.
+- **`vim.bo[buf].buftype = "terminal"` is rejected (E474)**, so a spec cannot fake
+  a terminal buffer. A `nofile` scratch buffer is the closest stand-in and
+  satisfies a `buftype ~= ""` guard for the same reason a real terminal does —
+  but it is also unnamed, so pin a name-plus-buftype guard on a *named* scratch
+  buffer (`H.scratch({ name = "NvimTree_1", scratch = true })`) instead.
+- **Async `vim.uv.fs_rename` calls can complete out of order**, so several
+  in-flight writes to one path do not settle on the last one queued. Measured: 80
+  rapid buffer switches ending on `other.py` left the file reading `Real.java`.
+  Testing the fix needs the libuv callbacks *queued* rather than run inline —
+  `claude_cli_spec`'s `capture_ctx({ manual = true })` — because a stub that calls
+  back synchronously makes every write finish before the next one starts, which is
+  the one interleaving that cannot go wrong.
+- **`vim.uv.fs_open` and friends dispatch ~800× faster than `io.open`** for the
+  same small write (0.8µs vs 652.9µs measured), so a per-`BufEnter` write is not
+  something to reach for `io.open` for.
+- **nvim's LuaJIT has no `table.pack` or `table.unpack`** (both are `nil`; the
+  global `unpack` is what exists). Use `{ n = select("#", ...), ... }` and
+  `unpack(args, 1, args.n)`. A call to the missing one throws from inside a stub,
+  where an autocmd callback swallows it and the spec fails somewhere unrelated.
+- **`jobstart`'s `on_stdout` hands back the fragment after the last newline as the
+  final element**, so a complete line arrives as `{ line, "" }`. A fixture that
+  omits the `""` means "this line is not finished yet" and the code under test is
+  right to hold it — an easy way to write a test that fails against working code.
 
 ## Config bugs these tests found
 
@@ -405,6 +457,77 @@ inferred.
 Reported by the same audit and deliberately *not* fixed: handler-chain deepening
 on `:Lazy reload` (session-safe as written), and nvim-notify's append-only history
 (tens of KB).
+
+### Found by auditing the Claude/MCP integration, fixed here
+
+The audit raised 44 findings; 24 did not survive being reproduced. These are the
+ones that did. Every one was reproduced before it was fixed and re-measured after,
+and each is now pinned by a case that fails when the fix is reverted.
+
+- **The visual AI commands sent the wrong code, or none.** The maps are plain Lua
+  callbacks with no `:<C-u>`, so they run with visual mode still active and the
+  `'<`/`'>` marks unwritten: the first visual command of every session reported "No
+  text selected" and sent nothing, and every one after it silently sent the
+  *previous* selection. Now reads the live selection with `getregion`, which also
+  fixed blockwise `<C-v>` sending whole lines and byte slicing cutting multibyte
+  characters in half. — `claude_cli_spec`
+- **`mcp/nvim_context_server.py` was registered nowhere.** No `.mcp.json` in the
+  repo or `$HOME` and no `claude mcp add` entry, so `get_current_file` was not
+  callable, the system prompt told Claude to call a tool that did not exist, and
+  every `BufEnter` wrote a file nothing ever read. Registered inline via
+  `--mcp-config` on the panel's own invocation, so pulling the repo is the whole
+  install. — `claude_cli_spec`
+- **The context file was `/tmp/nvim-claude-ctx`** — a fixed name in a
+  world-writable directory shared by every account on the machine, where another
+  user can pre-create the path as a symlink and receive the name of every file you
+  open. Now under `$XDG_RUNTIME_DIR` (falling back to `stdpath("cache")`), mode
+  0600, and written to a per-pid temp file that is `rename`d into place so a
+  concurrent read cannot catch it truncated. — `claude_cli_spec`, `mcp_server_spec`
+- **Answers appeared all at once, at the end.** `--output-format text` buffers the
+  whole response; the float sat on "Asking Claude…" for the length of the request.
+  Now `stream-json --include-partial-messages --verbose`, rendered append-only
+  behind a 50ms throttle. Measured on a real request: first text at 3.9s growing in
+  ~100–160 character steps, against nothing at all until 11.3s. — `claude_cli_spec`
+- **One-shot prompts started every MCP server the user has.** `--strict-mcp-config`
+  with an empty server set saves 0.8s per keypress-driven request (3.15s → 2.32s
+  measured). The panel deliberately does *not* pass it: that is a conversation, and
+  silently disabling the user's own servers for its duration would be a surprise. —
+  `claude_cli_spec`
+- **A missing `claude` binary produced a stack trace out of the keymap**, plus an
+  empty float or an orphaned buffer, because `jobstart`/`termopen` throw for a
+  missing executable rather than returning an error code — so the exit-code branch
+  advising "check that claude is installed" could never run. Both entry points now
+  check first, and the panel's spawn is `pcall`'d as well (a binary on `$PATH` can
+  still fail to exec). — `claude_cli_spec`
+- **The panel became permanently unclosable if the code window went away.**
+  Closing the only window is `E444`, and the throw escaped *before* `state.win` was
+  cleared, so `panel_is_open()` kept returning true and every later `<C-g>` hit the
+  same error. Reached by `:q` in the code window, `<C-w>c`, or `:only` from the
+  panel. — `claude_cli_spec`
+- **`botright 80vsplit` left the code window zero columns wide** on an 80-column
+  terminal — a bare ssh session, a split tmux pane — so opening the panel hid the
+  file you wanted to ask about. Now 40% of `columns` (the same proportion
+  `lua/plugins/terminal.lua` already uses) capped at 80. — `claude_cli_spec`
+- **Entering the file tree, a terminal, a help page or the chat panel itself
+  rewrote the context record**, because the guard only checked that the buffer had
+  a name. Glance at the tree, ask "explain this file", and Claude was told the tree
+  was your file. `buftype == ""` is the check, and it subsumes the panel's own
+  special case. — `claude_cli_spec`
+- **An empty context file came back from the MCP tool as an empty text block with
+  `isError` false** — a successful answer that said nothing. Now the same reply as
+  a missing file. — `mcp_server_spec`
+- **The server answered any tool name at all with the context**, so a client's typo
+  or a stale tool list looked like a working call; and it answered every unknown
+  *method* with an empty success, which is a schema violation for anything whose
+  result has required fields (`resources/list` needs a `resources` array). Now
+  `-32602` and `-32601`. — `mcp_server_spec`
+- Found while fixing the above, not by the audit: **serializing the context writes
+  was itself a bug at first.** A unique temp name per write let the renames complete
+  out of order — 80 rapid switches ending on `other.py` left the file reading
+  `Real.java`. One write in flight, newest pending content wins. And the first
+  streaming version blanked the placeholder on the CLI's session-init events,
+  seconds before any token, which reads as a hang rather than as progress. —
+  `claude_cli_spec`
 
 ### Still pinned, deliberately not fixed
 
