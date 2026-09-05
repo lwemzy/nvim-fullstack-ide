@@ -109,11 +109,31 @@ autocmd({ "FocusLost", "BufLeave" }, {
 
 -- Java: reindex project when a new .java file is first saved
 local new_java_bufs = {}
+local new_java_group = augroup("java_new_file_track", { clear = true })
 autocmd("BufNewFile", {
-  group = augroup("java_new_file_track", { clear = true }),
+  group = new_java_group,
   pattern = "*.java",
   callback = function(ev)
     new_java_bufs[ev.buf] = true
+  end,
+})
+-- Abandoning a new .java file never reaches the BufWritePost below, so the entry
+-- stayed set for the rest of the session. `:bd` is the case that turns that into a
+-- wrong answer rather than just a stale byte: unlike `:bw` it keeps the buffer in
+-- the list, so re-editing that path later gets the SAME bufnr back — and once the
+-- file exists on disk (git pull, a generator, the other end of a rename) the
+-- re-edit takes the BufReadPost path, so BufNewFile does not re-fire to justify
+-- the mark. The next :w then ran a full java.projectConfiguration.update, a
+-- multi-second Gradle round trip plus a "reindexing project…" notification, on an
+-- ordinary save. BufWipeout is the milder half: no wrong reindex is possible
+-- there, since nvim never hands out a wiped buffer's number again, but the entry
+-- is dead weight for the session either way. Same shape as the inlay-hint
+-- per-buffer state in lua/plugins/lsp.lua, and cleared the same way.
+autocmd({ "BufWipeout", "BufDelete" }, {
+  group = new_java_group,
+  pattern = "*.java",
+  callback = function(ev)
+    new_java_bufs[ev.buf] = nil
   end,
 })
 autocmd("BufWritePost", {

@@ -85,6 +85,34 @@ if not lombok_arg then
   vim.notify("jdtls: lombok.jar not found — Lombok-generated members will be invisible", vim.log.levels.WARN)
 end
 
+-- ── jdtls heap ──────────────────────────────────────────────────────────────
+-- Sized from the machine rather than hardcoded, because jdtls is only one of
+-- several JVMs and language servers this config can have running at once: the
+-- Gradle daemon Buildship spawns for the import, boot-ls (another JVM, pinned to
+-- -Xmx1G by spring-boot.nvim's launch.lua), plus node for ts_ls /
+-- angularls / eslint. A flat -Xmx4G is invisible on a big machine and reckless
+-- on a small one, and it is worse than reckless on Linux specifically: the OOM
+-- killer picks the largest RSS, which is jdtls, so the failure presents as Java
+-- completion dying mid-session with nothing in nvim to explain it. (macOS just
+-- swaps and gets slow, which is why this never showed up here.)
+--
+-- Total/6 to a 4G ceiling. The ceiling keeps the previous behaviour on anything
+-- from ~24GB up; the divisor lands a 16GB box on ~2.7G and an 8GB box on ~1.4G,
+-- against a reference point of 1G, which is what VS Code's Java extension
+-- defaults java.jdt.ls.vmargs to. The floor is below that on purpose: on a 4GB
+-- machine a smaller heap that GCs hard still completes, where a heap the machine
+-- cannot back does not.
+local heap_mb = (function()
+  local total = vim.uv.get_total_memory()
+  -- cgroup/container limit, which is the only number that matters inside Docker
+  -- or a devcontainer — where the host's total is not ours to spend. Returns 0
+  -- when unconstrained. (WSL2 needs no special case: it reports its own share as
+  -- total inside the VM.)
+  local constrained = vim.uv.get_constrained_memory() or 0
+  if constrained > 0 then total = math.min(total, constrained) end
+  return math.max(512, math.min(4096, math.floor(total / 6 / 1024 / 1024)))
+end)()
+
 -- Workspace dir must exist before jdtls starts; otherwise LaunchingPlugin can't save install info
 vim.fn.mkdir(workspace_dir, "p")
 
@@ -92,7 +120,7 @@ local config = {
   cmd = (function()
     local c = {
       mason_bin,
-      "--jvm-arg=-Xmx4G",
+      "--jvm-arg=-Xmx" .. heap_mb .. "m",
       "--jvm-arg=-XX:+UseG1GC",
       "--jvm-arg=-XX:GCTimeRatio=4",
     }
@@ -215,14 +243,22 @@ local config = {
   },
 
   on_attach = function(client, bufnr)
-    -- One augroup per buffer, so re-firing FileType java (:e, :e!, :JdtRestart,
-    -- and JdtlsClean's own `vim.cmd("edit")`) REPLACES these autocmds instead of
-    -- stacking another copy. Previously each reload added another blocking
-    -- format-on-save round trip, another full codeLens+resolve sweep per
-    -- BufEnter/InsertLeave/save, and another clear-namespace + extmark pass on
-    -- every keystroke via CursorMovedI — i.e. visible typing lag that got worse
-    -- the longer the session ran.
-    local group = vim.api.nvim_create_augroup("java_ftplugin_" .. bufnr, { clear = true })
+    -- Re-firing FileType java (:e, :e!, :JdtRestart, and JdtlsClean's own
+    -- `vim.cmd("edit")`) must REPLACE this buffer's autocmds instead of stacking
+    -- another copy. Previously each reload added another blocking format-on-save
+    -- round trip, another full codeLens+resolve sweep per BufEnter/InsertLeave/
+    -- save, and another clear-namespace + extmark pass on every keystroke via
+    -- CursorMovedI — i.e. visible typing lag that got worse the longer the
+    -- session ran.
+    --
+    -- One SHARED augroup, cleared for this buffer only, rather than an augroup
+    -- named per buffer. Both give identical replace-not-stack semantics, but a
+    -- per-buffer name is never reclaimed: nvim deletes a wiped buffer's
+    -- buffer-local autocmds, not the group they were in, so a long session
+    -- accumulated one dead `java_ftplugin_<bufnr>` group per Java file ever
+    -- opened. Measured: 500 opened-and-wiped buffers left 500 empty groups.
+    local group = vim.api.nvim_create_augroup("java_ftplugin", { clear = false })
+    vim.api.nvim_clear_autocmds({ group = group, buffer = bufnr })
 
     local map = function(keys, func, desc)
       vim.keymap.set("n", keys, func, { buffer = bufnr, desc = desc })
@@ -300,7 +336,14 @@ local config = {
     -- lens on its own virt_line above the code — instead: render only the
     -- lens(es) for the line the cursor is currently on, inline at end-of-line.
     if client.server_capabilities.codeLensProvider then
-      local codelens_ns = vim.api.nvim_create_namespace("java_codelens_" .. bufnr)
+      -- One namespace for every Java buffer, not one per buffer. Namespaces are
+      -- process-global and there is NO API to delete one, so a name built from
+      -- bufnr leaked a permanent entry per Java file opened, for the life of the
+      -- session (measured: 500 buffers -> 500 namespaces, surviving buf_delete
+      -- and a full collectgarbage). Sharing is safe because every call below is
+      -- already scoped to `bufnr`: clear_namespace and set_extmark both take the
+      -- buffer, so two Java buffers cannot see each other's extmarks.
+      local codelens_ns = vim.api.nvim_create_namespace("java_codelens")
       local codelens_by_row = {}
 
       local function render_cursor_lens()

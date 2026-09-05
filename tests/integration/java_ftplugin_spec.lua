@@ -189,15 +189,13 @@ describe("ftplugin/java.lua", function()
       assert.equals(MASON_JDTLS, captured.cmd[1])
     end)
 
-    it("sets the heap and GC JVM args", function()
-      -- A 4G heap and G1 are what keep a large Gradle project's import from
-      -- thrashing; they are passed as --jvm-arg because the launcher is a python
-      -- wrapper, not the JVM.
-      assert.is_true(vim.tbl_contains(captured.cmd, "--jvm-arg=-Xmx4G"))
+    it("sets the GC JVM args", function()
+      -- G1 with a throughput-biased GCTimeRatio is what keeps a large Gradle
+      -- project's import from thrashing; passed as --jvm-arg because the launcher
+      -- is a python wrapper, not the JVM.
       assert.is_true(vim.tbl_contains(captured.cmd, "--jvm-arg=-XX:+UseG1GC"))
       assert.is_true(vim.tbl_contains(captured.cmd, "--jvm-arg=-XX:GCTimeRatio=4"))
     end)
-
     it("pins the launcher to a discovered JDK 21+ when one exists", function()
       local newest = require("config.jdk").newest(21)
       local found
@@ -237,6 +235,53 @@ describe("ftplugin/java.lua", function()
         -- `and ... or nil`, so Lombok projects were simply broken with no clue.
         assert.is_true(warned, "missing lombok.jar must be reported, not silent")
       end
+    end)
+  end)
+
+  describe("heap sizing", function()
+    --- The -Xmx value the ftplugin chose, in MB.
+    local function heap_mb(total_gb, constrained_gb)
+      local gb = 1024 * 1024 * 1024
+      H.stub(vim.uv, "get_total_memory", function() return total_gb * gb end)
+      H.stub(vim.uv, "get_constrained_memory", function()
+        return (constrained_gb or 0) * gb
+      end)
+      -- The heap is computed at ftplugin load time, so the stubs have to be in
+      -- place before the buffer is opened, not before start_or_attach.
+      open_java(java_project("heap-" .. total_gb .. "-" .. (constrained_gb or 0)))
+      for _, arg in ipairs(captured.cmd) do
+        local mb = arg:match("^%-%-jvm%-arg=%-Xmx(%d+)m$")
+        if mb then return tonumber(mb) end
+      end
+      error("no -Xmx arg in: " .. vim.inspect(captured.cmd))
+    end
+
+    it("caps at 4G on a large machine", function()
+      -- The previous hardcoded value. Anything from ~24GB up must be unchanged,
+      -- so this is not a behaviour change for the machine it was tuned on.
+      assert.equals(4096, heap_mb(64))
+    end)
+
+    it("scales down on a small machine", function()
+      -- jdtls is one of several JVMs and node servers this config can run at
+      -- once. On Linux an over-committed box does not degrade, it OOM-kills the
+      -- largest RSS — jdtls — so Java completion dies mid-session with nothing
+      -- in nvim to explain it.
+      assert.equals(2730, heap_mb(16))
+      assert.equals(1365, heap_mb(8))
+    end)
+
+    it("keeps a floor so a tiny machine still gets a usable heap", function()
+      -- A heap that GCs hard still completes; one the machine cannot back does
+      -- not start at all.
+      assert.equals(512, heap_mb(2))
+    end)
+
+    it("obeys a cgroup limit over the host's total", function()
+      -- Inside Docker or a devcontainer the host's RAM is not ours to spend, and
+      -- get_total_memory still reports the host's. Exceeding the cgroup limit is
+      -- an instant kill, not a slowdown.
+      assert.equals(682, heap_mb(64, 4))
     end)
   end)
 
@@ -412,9 +457,8 @@ describe("ftplugin/java.lua", function()
       end
     end)
 
-    it("creates one augroup per buffer and replaces it on re-attach", function()
-      local group = "java_ftplugin_" .. bufnr
-      local before = H.count_autocmds("BufWritePre", group, bufnr)
+    it("replaces this buffer's autocmds on re-attach", function()
+      local before = H.count_autocmds("BufWritePre", "java_ftplugin", bufnr)
       assert.is_true(before > 0)
 
       -- FileType java re-fires on :e, :e!, :JdtRestart and JdtlsClean's own
@@ -422,11 +466,40 @@ describe("ftplugin/java.lua", function()
       -- format-on-save round trip and another full codeLens sweep per event —
       -- typing lag that got worse the longer the session ran.
       captured.on_attach(client, bufnr)
-      assert.equals(before, H.count_autocmds("BufWritePre", group, bufnr))
+      assert.equals(before, H.count_autocmds("BufWritePre", "java_ftplugin", bufnr))
+    end)
+
+    it("uses one shared augroup, and clears only the re-attaching buffer", function()
+      -- The group is shared across buffers because a name built from bufnr is
+      -- never reclaimed (nvim deletes a wiped buffer's autocmds, not its group),
+      -- so it leaked one empty augroup per Java file opened. The risk that
+      -- introduces is the opposite one: clearing the whole group on attach would
+      -- silently delete every other Java buffer's format-on-save.
+      local other = H.scratch({ lines = { "x" } })
+      local srv = fake_lsp.start({
+        name = "jdtls",
+        bufnr = other,
+        root_dir = H.tmpdir("shared-group-root"),
+        capabilities = { codeLensProvider = true },
+      })
+      H.track_client(srv.id)
+      captured.on_attach(srv.client, other)
+
+      -- Re-attaching `other` must leave `bufnr` alone.
+      captured.on_attach(srv.client, other)
+      assert.is_true(H.count_autocmds("BufWritePre", "java_ftplugin", bufnr) > 0)
+      assert.equals(1, H.count_autocmds("BufWritePre", "java_ftplugin", other))
+
+      -- And no per-buffer group name exists to be left behind. Note this cannot
+      -- be checked with H.autocmds: nvim has no API that lists augroups, and
+      -- nvim_get_autocmds only returns groups that still HAVE autocmds — an empty
+      -- group is invisible to it, which is precisely why the leak was silent.
+      -- Asking for a group by name errors iff the group does not exist.
+      assert.is_false(pcall(vim.api.nvim_get_autocmds, { group = "java_ftplugin_" .. bufnr }))
     end)
 
     it("registers format-on-save against the attaching client only", function()
-      local autocmds = H.autocmds({ event = "BufWritePre", group = "java_ftplugin_" .. bufnr, buffer = bufnr })
+      local autocmds = H.autocmds({ event = "BufWritePre", group = "java_ftplugin", buffer = bufnr })
       assert.equals(1, #autocmds)
       -- Scoped to this client id so a second attached server (spring-boot) is
       -- never asked to format Java.
@@ -450,8 +523,22 @@ describe("ftplugin/java.lua", function()
       H.track_client(srv.id)
       captured.on_attach(srv.client, other)
 
-      assert.equals(0, H.count_autocmds("CursorMoved", "java_ftplugin_" .. other, other))
-      assert.is_true(H.count_autocmds("CursorMoved", "java_ftplugin_" .. bufnr, bufnr) > 0)
+      assert.equals(0, H.count_autocmds("CursorMoved", "java_ftplugin", other))
+      assert.is_true(H.count_autocmds("CursorMoved", "java_ftplugin", bufnr) > 0)
+    end)
+
+    it("shares one codelens namespace across buffers", function()
+      -- Namespaces are process-global and nvim has NO API to delete one, so a
+      -- name built from bufnr leaked a permanent entry per Java file opened —
+      -- for the whole session, surviving buffer wipe and collectgarbage.
+      local names = vim.api.nvim_get_namespaces()
+      assert.is_not_nil(names["java_codelens"])
+      for name in pairs(names) do
+        assert.is_nil(
+          name:match("^java_codelens_%d+$"),
+          "per-buffer codelens namespace leaked: " .. name
+        )
+      end
     end)
   end)
 

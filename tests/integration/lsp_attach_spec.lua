@@ -489,7 +489,7 @@ describe("eslint on_attach chaining", function()
       capabilities = fake_lsp.caps.full,
     })
     H.track_client(srv.id)
-    H.track_augroup("eslint_fix_" .. bufnr)
+    H.track_augroup("eslint_fix")
     local on_attach = vim.lsp.config["eslint"].on_attach
     assert.is_function(on_attach)
     on_attach(srv.client, bufnr)
@@ -509,14 +509,34 @@ describe("eslint on_attach chaining", function()
 
   it("registers exactly one fix-on-save autocmd per buffer", function()
     attach_as_eslint()
-    local group = "eslint_fix_" .. bufnr
-    assert.equals(1, H.count_autocmds("BufWritePre", group, bufnr))
+    assert.equals(1, H.count_autocmds("BufWritePre", "eslint_fix", bufnr))
 
-    -- Re-entering the buffer re-attaches, and without the per-buffer augroup's
-    -- clear=true each pass stacked another BufWritePre — N runs of
-    -- eslint --fix on a single save.
+    -- Re-entering the buffer re-attaches, and without the clear each pass
+    -- stacked another BufWritePre — N runs of eslint --fix on a single save.
     vim.lsp.config["eslint"].on_attach(assert(vim.lsp.get_clients({ name = "eslint" })[1]), bufnr)
-    assert.equals(1, H.count_autocmds("BufWritePre", group, bufnr))
+    assert.equals(1, H.count_autocmds("BufWritePre", "eslint_fix", bufnr))
+  end)
+
+  it("uses one shared augroup, and clears only the re-attaching buffer", function()
+    -- The group is shared because a name built from bufnr is never reclaimed:
+    -- nvim deletes a wiped buffer's autocmds but not the group holding them, so
+    -- `eslint_fix_<bufnr>` leaked one empty augroup per JS/TS file opened. The
+    -- hazard that trade brings in is the reverse — clearing the whole group on
+    -- attach would delete every other buffer's fix-on-save. Hence clear = false.
+    local srv = attach_as_eslint()
+
+    local other = H.scratch({ lines = { "x" } })
+    vim.lsp.config["eslint"].on_attach(srv.client, other)
+    vim.lsp.config["eslint"].on_attach(srv.client, other)
+
+    assert.equals(1, H.count_autocmds("BufWritePre", "eslint_fix", bufnr))
+    assert.equals(1, H.count_autocmds("BufWritePre", "eslint_fix", other))
+
+    -- No per-buffer group left behind. nvim has no API listing augroups, and
+    -- nvim_get_autocmds only reports groups that still have autocmds — an empty
+    -- one is invisible to it, which is why this leak was silent. Asking for a
+    -- group by name errors iff it does not exist.
+    assert.is_false(pcall(vim.api.nvim_get_autocmds, { group = "eslint_fix_" .. bufnr }))
   end)
 
   it("gives the command to no other server", function()
@@ -534,6 +554,6 @@ describe("eslint on_attach chaining", function()
     end)
 
     assert.is_nil(vim.api.nvim_buf_get_commands(bufnr, {})["LspEslintFixAll"])
-    assert.equals(0, #H.autocmds({ event = "BufWritePre", group = "eslint_fix_" .. bufnr }))
+    assert.equals(0, H.count_autocmds("BufWritePre", "eslint_fix", bufnr))
   end)
 end)

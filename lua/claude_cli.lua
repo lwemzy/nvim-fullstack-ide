@@ -93,9 +93,29 @@ local function create_terminal_buf()
     vim.fn.termopen({ "claude", "--append-system-prompt", system_prompt }, {
       env = { EDITOR = "nvim", VISUAL = "nvim" },
       on_exit = function()
-        state.buf = nil
-        state.win = nil
+        -- `claude` exiting — /exit, Ctrl-D, a crash, an auth timeout — used to
+        -- nil these handles and nothing else. That left BOTH the
+        -- "[Process exited]" terminal buffer (with its whole scrollback: Claude
+        -- streams a lot, so this reached the 10 000-line cap routinely) and its
+        -- window behind, while panel_is_open() started reporting false because
+        -- it reads state.win. So the next <C-g> took the open_panel path and
+        -- added a SECOND split with a SECOND terminal, on top of the stale one.
+        -- The orphan is buflisted = false, so it did not even appear in :ls.
+        --
+        -- Read the handles out before clearing, then tear down for real.
+        local buf, win = state.buf, state.win
+        state.buf, state.win = nil, nil
         stop_reload_timer()
+        -- Scheduled: this runs from the job's own exit callback, where the
+        -- terminal buffer is not yet in a state that can be deleted.
+        vim.schedule(function()
+          if win and vim.api.nvim_win_is_valid(win) then
+            pcall(vim.api.nvim_win_close, win, true)
+          end
+          if buf and vim.api.nvim_buf_is_valid(buf) then
+            pcall(vim.api.nvim_buf_delete, buf, { force = true })
+          end
+        end)
       end,
     })
   end)
@@ -162,6 +182,12 @@ function M.ask(prompt, title)
   local output = {}
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].filetype = "markdown"
+  -- nvim_create_buf's scratch flag gives bufhidden = "hide", not "wipe": closing
+  -- the float left the buffer valid AND loaded, holding the entire response, for
+  -- the rest of the session. One per <C-a>/<C-1>…<C-6> press, never reused — the
+  -- bytes are small but the count is unbounded, and none of them are listed, so
+  -- nothing ever showed they were there.
+  vim.bo[buf].bufhidden = "wipe"
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "  Asking Claude…" })
 
   local width  = math.floor(vim.o.columns * 0.75)
@@ -186,7 +212,7 @@ function M.ask(prompt, title)
     end, { buffer = buf, silent = true })
   end
 
-  vim.fn.jobstart({ "claude", "-p", prompt }, {
+  local job = vim.fn.jobstart({ "claude", "-p", prompt }, {
     stdout_buffered = false,
     on_stdout = function(_, data)
       for _, line in ipairs(data) do
@@ -216,6 +242,23 @@ function M.ask(prompt, title)
       end)
     end,
   })
+
+  -- Dismissing the float early (q/<Esc>) left `claude -p` running to completion,
+  -- still appending to `output` and still writing into a buffer nobody can see.
+  -- Wiping the buffer is the one event that covers every way the float can go
+  -- away, including :q, :bd and closing the tab.
+  if job > 0 then
+    vim.api.nvim_create_autocmd("BufWipeout", {
+      -- clear = false: the group is shared by every concurrent M.ask float, so
+      -- clearing it here would drop the other floats' jobstop handlers. Each
+      -- entry removes itself anyway (`once`, plus the buffer it is bound to is
+      -- the thing being wiped), so nothing accumulates.
+      group = vim.api.nvim_create_augroup("claude_ask_jobs", { clear = false }),
+      buffer = buf,
+      once = true,
+      callback = function() pcall(vim.fn.jobstop, job) end,
+    })
+  end
 end
 
 -- ── Visual selection helpers ─────────────────────────────────────────────────

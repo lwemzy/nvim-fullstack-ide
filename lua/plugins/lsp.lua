@@ -452,6 +452,14 @@ return {
         end,
       })
 
+      -- ── Reclaim idle JVM language servers ───────────────────────────────
+      -- Neovim never stops a client by itself, so visiting N Java projects in
+      -- one session leaves N jdtls JVMs plus N boot-ls JVMs resident long after
+      -- the last buffer from those projects is closed. See the module for why
+      -- that is the shape that ends at the Linux OOM killer, and why the grace
+      -- period before reclaiming one is deliberately long.
+      require("config.lsp_reap").setup()
+
       -- ── Per-server overrides ────────────────────────────────────────────
       -- NOTE: there used to be a root_dir override here that disabled ts_ls
       -- entirely whenever angular.json was present, on the premise that
@@ -534,11 +542,19 @@ return {
           end
 
           -- The command is "LspEslintFixAll", not "EslintFixAll" (the bare name
-          -- only ever existed in the deprecated lspconfig framework). Needs a
-          -- per-buffer augroup too: without one, every re-entry to the buffer
-          -- stacked another BufWritePre, running eslint --fix N times per save.
+          -- only ever existed in the deprecated lspconfig framework). The clear
+          -- matters: without it, every re-attach to the buffer stacked another
+          -- BufWritePre, running eslint --fix N times per save.
+          --
+          -- Shared group cleared per buffer, not a group named `eslint_fix_<bufnr>`
+          -- — nvim reclaims a wiped buffer's autocmds but not the group holding
+          -- them, so the per-buffer name leaked one empty group per JS/TS file
+          -- opened. `clear = false` on the create is load-bearing: clearing the
+          -- whole group here would delete every OTHER buffer's fix-on-save.
+          local group = vim.api.nvim_create_augroup("eslint_fix", { clear = false })
+          vim.api.nvim_clear_autocmds({ group = group, buffer = bufnr })
           vim.api.nvim_create_autocmd("BufWritePre", {
-            group = vim.api.nvim_create_augroup("eslint_fix_" .. bufnr, { clear = true }),
+            group = group,
             buffer = bufnr,
             callback = function()
               pcall(vim.cmd, "LspEslintFixAll")

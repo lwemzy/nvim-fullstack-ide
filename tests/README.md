@@ -217,6 +217,58 @@ Conventions worth following:
   it is a symlink into a real JDK — so `jdk_spec`'s harness stubs `exepath`.
   `health_spec` replaces `config.jdk` outright for the same reason: it caches its
   scan, so the machine's real JDKs would decide the expectations.
+- **An empty augroup is invisible to `nvim_get_autocmds`.** nvim has no API that
+  lists augroups, and `nvim_get_autocmds({group = ...})` only returns groups that
+  still *have* autocmds — which is why a per-buffer augroup name could leak one
+  dead group per file opened without any assertion noticing. The discriminator is
+  `pcall(vim.api.nvim_get_autocmds, {group = name})`: it errors iff the group does
+  not exist. `H.autocmds` swallows that error deliberately, so assert on the raw
+  `pcall` when the question is *existence*.
+- **nvim deletes a wiped buffer's buffer-local autocmds, not the group they were
+  in.** Measured: after wiping 500 buffers, `java_ftplugin_2` had zero autocmds
+  and still existed. The shared-group pattern
+  (`nvim_create_augroup(name, {clear = false})` + `nvim_clear_autocmds({group,
+  buffer})`) has identical replace-not-stack semantics per buffer; `clear = false`
+  is load-bearing, since `clear = true` would wipe every *other* buffer's
+  autocmds.
+- **There is no API to delete a namespace.** Measured: 500 distinct namespace
+  names left 502 namespaces, surviving `nvim_buf_delete` and a full
+  `collectgarbage`. A fixed name is idempotent (200 calls → 1 namespace), so any
+  namespace built from a bufnr leaks for the life of the session. `nvim_get_namespaces()`
+  is the observable.
+- **nvim never stops an LSP client on its own.** `Client:_on_detach` only clears
+  `attached_buffers[bufnr]`, and the only internal `client:stop()` calls are
+  `vim.lsp.enable(name, false)` and `VimLeavePre`. A spec about client lifetime is
+  therefore a spec about *our* code; `lsp_reap_spec` drives it by passing the clock
+  into `sweep()` rather than waiting out a five-minute timer.
+- **`LspDetach` fires before `attached_buffers[bufnr] = nil`** and is guarded by
+  `nvim_buf_is_valid`, so `:bwipeout` can retire a buffer without it arriving at
+  all. Prefer re-deriving state from `attached_buffers` (which nvim's own
+  deprecation notice for `get_buffers_by_client_id` names as the supported read)
+  over bookkeeping from events. All three retirement routes — `:bwipeout`,
+  `:bdelete`, `:bunload` — empty it, but only `:bwipeout` also invalidates the
+  buffer, so a check written on validity alone misses two of the three.
+- **nvim never recycles a buffer number**, so a table keyed by bufnr cannot be
+  poisoned by a *wiped* buffer's leftover entry. `:bdelete` is the case that bites:
+  it keeps the buffer in the list, so re-editing that path hands back the same
+  bufnr and stale per-buffer state applies to a different file's contents.
+  `autocmds_spec`'s abandoned-`.java` case asserts the premise (`assert.equals(buf,
+  reopened)`) rather than assuming it.
+- **`nvim_create_buf(false, true)` gives `bufhidden = "hide"`, not `"wipe"`** — a
+  float's buffer stays valid *and* loaded after `nvim_win_close`. Assert
+  `vim.bo[buf].bufhidden` and then that closing the window invalidates the buffer;
+  the first assertion alone passes on a config that never opens a window.
+- **toggleterm with `close_on_exit = false` orphans the terminal.**
+  `__handle_exit` does nothing while toggleterm's own `TermClose` autocmd still
+  drops the entry from the registry, so the buffer survives with its full
+  scrollback *and* is unreachable from `get_all()`. `Terminal:close()` only hides
+  the window; `Terminal:shutdown()` is what closes the window, deletes the buffer
+  and drops the registry entry. `terminal_spec` runs real processes (`true`,
+  `sleep 30`) because the reaping keys off `vim.fn.jobwait`, so a faked job would
+  only test the fake — and force-deletes every terminal buffer it made in
+  `after_each`, or the live job keeps the headless session alive.
+- **`vim.fn.jobwait({id}, 0)[1] == -1` means still running**; anything else (an
+  exit code, or `-3` for an invalid id) means it has exited.
 
 ## Config bugs these tests found
 
@@ -306,6 +358,53 @@ health check surfaces them.
 for this whole class: it reports the JDKs found, which one jdtls will launch on,
 the mason payloads whose absence removes a feature silently, and which LSP file-
 watching backend this OS gave Neovim.
+
+### Found by auditing memory use, fixed here
+
+Every one of these is unbounded in the number of files or keypresses in a session,
+which is what makes them worth fixing however small the per-instance cost: a
+per-instance cap is no help when the count is what grows. All were measured, not
+inferred.
+
+- `<F3>`/`<M-r>` built a toggleterm `Terminal` per keypress with
+  `close_on_exit = false`, so every finished run orphaned its buffer *with the full
+  scrollback* (10 000-line default, and libvterm keeps a cell grid per row — a
+  `bootRun` saturates that) and unreachable from toggleterm's registry. Finished
+  runs are now reaped when the next one starts; live ones are left alone, so
+  `npm run watch` alongside a build still works. — `terminal_spec`
+- The Claude panel's `on_exit` nil'd `state.buf`/`state.win` and nothing else, so
+  `claude` exiting (`/exit`, Ctrl-D, an auth timeout) left both the terminal buffer
+  and its window behind — while `panel_is_open()` started reporting false, so the
+  next `<C-g>` opened a *second* split with a *second* terminal on top of the
+  stale one. `buflisted = false` kept it out of `:ls`. — `claude_cli_spec`
+- `M.ask`'s float relied on `nvim_create_buf`'s scratch flag for cleanup, which
+  gives `bufhidden = "hide"`: one full response buffer retained per
+  `<C-a>`/`<C-1>`…`<C-6>` press, forever. And dismissing the float early left
+  `claude -p` running to completion, still appending into a buffer nobody can see;
+  a `BufWipeout` handler now stops the job. — `claude_cli_spec`
+- Nothing ever stopped a language server, so visiting N Java projects in a session
+  ended with N jdtls JVMs *plus* N boot-ls JVMs resident long after their last
+  buffer closed. On Linux that ends at the OOM killer, which picks the largest RSS
+  — jdtls — so it surfaced as Java completion dying mid-session with nothing in
+  nvim to explain it. `config.lsp_reap` now stops the JVM servers only, after five
+  idle minutes, and announces it. — `lsp_reap_spec`
+- `ftplugin/java.lua` created `java_codelens_<bufnr>` per buffer. Namespaces are
+  process-global with no delete API, so that was a permanent entry per Java file
+  opened. One shared name is safe because every call was already scoped to `bufnr`.
+  Same shape for `java_ftplugin_<bufnr>` and `eslint_fix_<bufnr>`, now shared
+  groups cleared per buffer. — `java_ftplugin_spec`, `lsp_attach_spec`
+- Abandoning a new `.java` file left its entry in the new-file tracking table.
+  With `:bd` that is a wrong answer rather than dead weight: the same bufnr comes
+  back on re-edit, and if the file exists by then `BufNewFile` does not re-fire, so
+  an ordinary `:w` paid a full `java.projectConfiguration.update`. —
+  `autocmds_spec`
+- jdtls ran on the launcher's default heap. `-Xmx` is now sized from the machine,
+  honouring `vim.uv.get_constrained_memory()` so a container's cgroup limit is
+  what counts rather than the host's RAM. — `java_ftplugin_spec`
+
+Reported by the same audit and deliberately *not* fixed: handler-chain deepening
+on `:Lazy reload` (session-safe as written), and nvim-notify's append-only history
+(tens of KB).
 
 ### Still pinned, deliberately not fixed
 

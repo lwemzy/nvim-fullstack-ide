@@ -215,6 +215,48 @@ describe("claude_cli", function()
       end
     end)
 
+    it("wipes the result buffer with the window instead of hiding it", function()
+      -- nvim_create_buf's scratch flag gives bufhidden = "hide", so dismissing
+      -- the float used to leave the buffer valid AND loaded, holding the whole
+      -- response, for the rest of the session — one per <C-a>/<C-1>…<C-6> press,
+      -- never reused. Unlisted too, so nothing ever showed they were piling up.
+      claude.ask("hi", "Title")
+      local win = vim.api.nvim_get_current_win()
+      local buf = vim.api.nvim_get_current_buf()
+      assert.equals("wipe", vim.bo[buf].bufhidden)
+
+      H.run_keymap("n", "q", buf)
+      assert.is_false(vim.api.nvim_win_is_valid(win))
+      assert.is_false(vim.api.nvim_buf_is_valid(buf))
+    end)
+
+    it("stops the claude process when the result window is dismissed early", function()
+      -- Dismissing the float left `claude -p` running to completion, still
+      -- accumulating output and still writing into a buffer nobody can see.
+      local stops = H.spy(vim.fn, "jobstop")
+      claude.ask("hi", "Title")
+      local buf = vim.api.nvim_get_current_buf()
+
+      H.run_keymap("n", "q", buf)
+      assert.equals(1, stops.count)
+      -- The id jobstart handed back, not a guess: stopping the wrong job would
+      -- be worse than stopping none.
+      assert.equals(1, stops[1][1])
+    end)
+
+    it("does not try to stop a job that never started", function()
+      -- jobstart returns 0 for an invalid argument and -1 when the binary is
+      -- missing; jobstop on either is an error, and it would fire on a code path
+      -- the user reaches simply by not having `claude` installed.
+      H.stub(vim.fn, "jobstart", function() return -1 end)
+      local stops = H.spy(vim.fn, "jobstop")
+      claude.ask("hi", "Title")
+      local buf = vim.api.nvim_get_current_buf()
+
+      H.run_keymap("n", "q", buf)
+      assert.equals(0, stops.count)
+    end)
+
     it("renders streamed stdout into the window", function()
       claude.ask("hi", "Title")
       local buf = vim.api.nvim_get_current_buf()
@@ -426,6 +468,42 @@ describe("claude_cli", function()
       -- Terminal-mode mapping: without it there is no way out of the panel
       -- short of <C-\><C-n> then :q.
       assert.is_not_nil(H.keymap("t", "<C-g>", buf))
+    end)
+
+    it("tears the panel down when claude itself exits", function()
+      -- `claude` exiting (/exit, Ctrl-D, a crash, an auth timeout) used to nil
+      -- the handles and nothing else. That left the "[Process exited]" terminal
+      -- buffer AND its window on screen, while panel_is_open() started reporting
+      -- false because it reads state.win — so the next toggle opened a SECOND
+      -- split with a SECOND terminal on top of the stale one.
+      claude.toggle_chat()
+      local buf = vim.api.nvim_get_current_buf()
+      local win = vim.api.nvim_get_current_win()
+      local before = #vim.api.nvim_list_wins()
+
+      -- The on_exit termopen was handed, invoked the way the job would.
+      terms[1][2].on_exit(1, 0, "exit")
+      vim.wait(200, function() return not vim.api.nvim_buf_is_valid(buf) end)
+
+      assert.is_false(vim.api.nvim_win_is_valid(win))
+      assert.is_false(vim.api.nvim_buf_is_valid(buf))
+      assert.equals(before - 1, #vim.api.nvim_list_wins())
+    end)
+
+    it("starts a single fresh panel after claude exited", function()
+      -- The observable consequence of the bug above. Absolute counts, not counts
+      -- relative to "after the exit": a relative assertion passes even with the
+      -- stale window still on screen, which is the exact bug being pinned.
+      local baseline = #vim.api.nvim_list_wins()
+      claude.toggle_chat()
+      terms[1][2].on_exit(1, 0, "exit")
+      vim.wait(200, function() return #vim.api.nvim_list_wins() == baseline end)
+      assert.equals(baseline, #vim.api.nvim_list_wins())
+
+      claude.toggle_chat()
+      assert.equals(baseline + 1, #vim.api.nvim_list_wins())
+      -- A fresh spawn is correct here (the old session is gone), but exactly one.
+      assert.equals(2, terms.count)
     end)
 
     it("focus_chat opens the panel when it is closed and focuses it when open", function()

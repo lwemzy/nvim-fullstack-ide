@@ -32,7 +32,7 @@ local EXPECTED = {
   treesitter_highlight   = { FileType = 1 },
   auto_save_stamp        = { BufReadPost = 1, BufWritePost = 1 },
   auto_save              = { FocusLost = 1, BufLeave = 1 },
-  java_new_file_track    = { BufNewFile = 1 },
+  java_new_file_track    = { BufNewFile = 1, BufWipeout = 1, BufDelete = 1 },
   java_new_file_reindex  = { BufWritePost = 1 },
   gradle_refresh         = { BufWritePost = 5 },
   auto_reload            = { FocusGained = 1, BufEnter = 1, CursorHold = 1, TermLeave = 1 },
@@ -109,10 +109,13 @@ describe("config.autocmds", function()
     end)
 
     it("watches only *.java for the new-file reindex", function()
-      assert.same({ "*.java" }, vim.tbl_map(function(a) return a.pattern end,
-        H.autocmds({ group = "java_new_file_track" })))
-      assert.same({ "*.java" }, vim.tbl_map(function(a) return a.pattern end,
-        H.autocmds({ group = "java_new_file_reindex" })))
+      -- Every autocmd in both groups, tracking and teardown alike: a pattern
+      -- wider than *.java here would mark and reindex non-Java buffers.
+      for _, group in ipairs({ "java_new_file_track", "java_new_file_reindex" }) do
+        for _, a in ipairs(H.autocmds({ group = group })) do
+          assert.equals("*.java", a.pattern, group .. " watches " .. tostring(a.pattern))
+        end
+      end
     end)
 
     it("watches every gradle build file for a project refresh", function()
@@ -553,6 +556,58 @@ describe("config.autocmds", function()
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "class Brand { }" })
       vim.cmd("silent write")
       assert.equals(1, defers.count)
+    end)
+
+    it("forgets a new .java file that was abandoned with :bd", function()
+      -- The stale-mark bug, reproduced exactly. `:bd` (unlike `:bw`) keeps the
+      -- buffer in the list, so re-editing that path hands back the SAME bufnr —
+      -- and once the file exists on disk, the re-edit takes the BufReadPost path,
+      -- so BufNewFile does not fire to re-justify the mark. Without the teardown
+      -- autocmd the mark left over from the abandoned buffer was still there, and
+      -- an ordinary :w paid a full project reimport.
+      local path = H.tmpdir("java") .. "/Abandoned.java"
+      local buf = H.edit(path) -- BufNewFile: marked
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "class Abandoned {}" })
+
+      -- :bd needs another buffer to fall back to, and needs ! because the new
+      -- buffer is modified — which is what "abandoned" means here.
+      vim.cmd("enew")
+      vim.cmd("silent! bdelete! " .. buf)
+      assert.is_true(vim.api.nvim_buf_is_valid(buf), ":bd discarded the buffer, so the premise is gone")
+
+      -- The file arrives from somewhere else (git pull, a generator, the far end
+      -- of a rename) and is opened again.
+      H.write(path, { "class Abandoned {}" })
+      local reopened = H.edit(path)
+      assert.equals(buf, reopened, "nvim handed out a different bufnr, so the premise is gone")
+
+      local clients = H.spy(vim.lsp, "get_clients", function() return {} end)
+      local defers = H.spy(vim, "defer_fn", function(fn) fn() end)
+      vim.api.nvim_buf_set_lines(reopened, 0, -1, false, { "class Abandoned { }" })
+      vim.cmd("silent write")
+      assert.equals(0, defers.count)
+      assert.equals(0, clients.count)
+    end)
+
+    it("clears only the abandoned buffer's mark, not every pending one", function()
+      -- The teardown keys off ev.buf. Clearing the whole table instead would look
+      -- correct in the case above while silently cancelling the reindex for any
+      -- other new file open at the time — the newly created siblings of a class
+      -- you just generated are exactly the buffers that need it most.
+      local dir = H.tmpdir("java")
+      local keep = H.edit(dir .. "/Keep.java")
+      vim.api.nvim_buf_set_lines(keep, 0, -1, false, { "class Keep {}" })
+      local drop = H.edit(dir .. "/Drop.java")
+      vim.api.nvim_buf_set_lines(drop, 0, -1, false, { "class Drop {}" })
+
+      vim.api.nvim_buf_delete(drop, { force = true })
+
+      local clients = H.spy(vim.lsp, "get_clients", function() return {} end)
+      local defers = H.spy(vim, "defer_fn", function(fn) fn() end)
+      vim.api.nvim_set_current_buf(keep)
+      vim.cmd("silent write")
+      assert.equals(1, defers.count)
+      assert.equals(1, clients.count)
     end)
   end)
 
