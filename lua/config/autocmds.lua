@@ -42,22 +42,68 @@ autocmd("FileType", {
   end,
 })
 
--- Enable treesitter highlighting for every buffer that has a parser
+-- Enable treesitter highlighting for every buffer that has a parser.
+-- Load-bearing: nvim-treesitter `main` no longer starts highlighting itself.
+-- Guarded on size and buftype because treesitter's incremental reparse is paid
+-- on every edit *before* nvim-cmp even debounces — a 3MB/20k-line JSON costs
+-- ~120ms to parse and ~24ms per keystroke to reparse, which reads as the
+-- completion menu lagging. Big files fall back to regex syntax instead.
+local TS_MAX_LINES = 10000
+local TS_MAX_BYTES = 512 * 1024
 autocmd("FileType", {
   group = augroup("treesitter_highlight", { clear = true }),
   callback = function(args)
+    if vim.bo[args.buf].buftype ~= "" then return end
+    if vim.api.nvim_buf_line_count(args.buf) > TS_MAX_LINES then return end
+    local name = vim.api.nvim_buf_get_name(args.buf)
+    if name ~= "" and (vim.fn.getfsize(name) or 0) > TS_MAX_BYTES then return end
     pcall(vim.treesitter.start, args.buf)
   end,
 })
 
--- Save when focus is lost or when switching away from a buffer
-autocmd({ "FocusLost", "BufLeave", "InsertLeave" }, {
+-- Track the on-disk mtime we last synced with, so auto-save can tell whether
+-- the file changed underneath us.
+local function stamp(buf)
+  local name = vim.api.nvim_buf_get_name(buf)
+  if name ~= "" then vim.b[buf].autosave_mtime = vim.fn.getftime(name) end
+end
+autocmd({ "BufReadPost", "BufWritePost" }, {
+  group = augroup("auto_save_stamp", { clear = true }),
+  callback = function(ev) stamp(ev.buf) end,
+})
+
+-- Save when focus is lost or when switching away from a buffer.
+--
+-- InsertLeave was deliberately REMOVED from this list. It made every single
+-- exit from insert mode write the file, which then fired conform.nvim's
+-- format_after_save (BufWritePost) — an async prettier run that rewrote the
+-- buffer ~130ms later, i.e. after you had already started typing again, moving
+-- the cursor mid-expression. It also meant two writes per InsertLeave and made
+-- format-on-save nondeterministic (conform drops its result with
+-- CONCURRENT_MODIFICATION, silently, if you type during the run).
+autocmd({ "FocusLost", "BufLeave" }, {
   group = augroup("auto_save", { clear = true }),
   callback = function()
     local buf = vim.api.nvim_get_current_buf()
-    if vim.bo[buf].modified and vim.bo[buf].buftype == "" and vim.fn.expand("%") ~= "" then
-      vim.cmd("silent! write")
+    if not (vim.bo[buf].modified and vim.bo[buf].buftype == "" and vim.fn.expand("%") ~= "") then
+      return
     end
+    -- `silent! write` does NOT suppress the "file has changed since reading it,
+    -- really write (y/n)?" prompt, and a modified buffer is never auto-reloaded
+    -- by checktime — so without this guard an external edit (git pull, Claude
+    -- writing files) made Esc/buffer-switch freeze on an invisible prompt that
+    -- your next keystroke then answered. Skip the auto-save instead and let the
+    -- user resolve it with an explicit :w.
+    local name = vim.api.nvim_buf_get_name(buf)
+    local known = vim.b[buf].autosave_mtime
+    if known and vim.fn.getftime(name) > known then
+      vim.notify(
+        "auto-save skipped: " .. vim.fn.fnamemodify(name, ":t") .. " changed on disk (:w to overwrite)",
+        vim.log.levels.WARN
+      )
+      return
+    end
+    vim.cmd("silent! write")
   end,
 })
 
@@ -108,12 +154,20 @@ autocmd("BufWritePost", {
 -- Auto-reload files changed outside Neovim
 -- TermLeave fires when exiting a terminal (e.g. Claude panel) — ideal for
 -- picking up file changes Claude made while you were in the terminal.
-autocmd({ "FocusGained", "BufEnter", "CursorHold", "CursorHoldI", "TermLeave" }, {
+--
+-- CursorHoldI was REMOVED. It ran :checktime from the insert-mode idle timer, so
+-- if a file changed on disk while you paused typing (Claude writing files, git
+-- pull, tsc/jest --watch) nvim reloaded the buffer *while you were still in
+-- insert mode*: your uncommitted text vanished, the completion context was
+-- destroyed, and the cursor was relocated into foreign text, so the next
+-- keystrokes edited the wrong place. The mode guard below is defence in depth
+-- for the remaining events (BufEnter can fire in insert mode).
+autocmd({ "FocusGained", "BufEnter", "CursorHold", "TermLeave" }, {
   group = augroup("auto_reload", { clear = true }),
   callback = function()
-    if vim.fn.mode() ~= "c" then
-      vim.cmd("silent! checktime")
-    end
+    -- skip insert, replace, cmdline, terminal and operator-pending
+    if vim.fn.mode():find("^[icRrt!]") then return end
+    vim.cmd("silent! checktime")
   end,
 })
 

@@ -67,6 +67,17 @@ return {
       "nvim-tree/nvim-web-devicons",
     },
     config = function()
+      -- barbecue attaches nvim-navic to every client advertising
+      -- documentSymbolProvider, and navic only supports ONE client per buffer —
+      -- so the second such client on a buffer logs "Failed to attach to <x> for
+      -- current buffer. Already attached to <y>". That is purely cosmetic (the
+      -- first client already supplies complete breadcrumbs), but the noise
+      -- previously drove real config damage: it was the stated reason ts_ls was
+      -- disabled in Angular projects, which cost those projects all TypeScript
+      -- intelligence (see lua/plugins/lsp.lua). Silence the message instead of
+      -- contorting the LSP setup around it.
+      vim.g.navic_silence = true
+
       require("barbecue").setup({
         theme = "auto",
         show_modified = true,

@@ -24,8 +24,20 @@ opt.splitbelow = true
 opt.cursorline = true
 opt.mouse = "a"
 opt.clipboard = "unnamedplus"
+-- Only affects Neovim's *native* completion (i_CTRL-X). nvim-cmp drives its own
+-- popup off cmp's `completion.completeopt`, not this option.
 opt.completeopt = "menuone,noinsert,noselect"
 opt.pumheight = 10
+-- Default border for every floating window. Set here (before lazy.setup, so it
+-- is in place when plugin configs run) because three separate things read it:
+--   1. vim.lsp.util.open_floating_preview -> hover + signature help
+--      (runtime/lua/vim/lsp/util.lua: `opts.border or vim.o.winborder`)
+--   2. cmp.config.window.bordered() -> falls back to `winborder`, and returns
+--      "none" when it is empty, which is why the completion/docs popups had no
+--      border at all despite calling bordered()
+--   3. nvim_open_win's `border` default
+-- One setting instead of repeating border="rounded" at every call site.
+opt.winborder = "rounded"
 opt.showmode = false
 opt.laststatus = 3
 opt.fileencoding = "utf-8"

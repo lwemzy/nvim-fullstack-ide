@@ -7,19 +7,70 @@ if vim.fn.executable(mason_bin) == 0 then
   return
 end
 
--- Per-project workspace to avoid cross-project class collisions
-local project_name = vim.fn.fnamemodify(vim.fn.getcwd(), ":p:h:t")
-local workspace_dir = vim.fn.stdpath("data") .. "/jdtls-workspaces/" .. project_name
+-- Resolve the project root ONCE and derive everything from it.
+local root_dir = require("jdtls.setup").find_root({
+  ".git", "mvnw", "gradlew", "pom.xml", "build.gradle", "build.gradle.kts",
+}) or vim.fn.getcwd()
+
+-- Per-project workspace to avoid cross-project class collisions.
+-- Must key off root_dir, NOT getcwd(): root_dir is derived from the buffer's
+-- path, so opening files from two different projects in one nvim session (or
+-- from a cwd above/outside the project) produced two jdtls clients pointing at
+-- the SAME -data dir. An Eclipse -data workspace is single-JVM (.metadata/.lock),
+-- so the second server either never reaches ServiceReady — no completions at
+-- all, stuck "Building…" — or both corrupt each other's index. The sha suffix
+-- disambiguates distinct projects that share a basename (e.g. two `demo`s).
+local workspace_dir = vim.fn.stdpath("data")
+  .. "/jdtls-workspaces/"
+  .. vim.fn.fnamemodify(root_dir, ":p:h:t")
+  .. "-"
+  .. vim.fn.sha256(root_dir):sub(1, 8)
 
 local cmp_ok, cmp_lsp = pcall(require, "cmp_nvim_lsp")
-local capabilities = cmp_ok
-  and cmp_lsp.default_capabilities()
-  or vim.lsp.protocol.make_client_capabilities()
+local capabilities = vim.tbl_deep_extend(
+  "force",
+  vim.lsp.protocol.make_client_capabilities(),
+  cmp_ok and cmp_lsp.default_capabilities() or {}
+)
 
-local lombok_jar = vim.fn.stdpath("data") .. "/lombok.jar"
+-- ── JDK 21+ discovery ───────────────────────────────────────────────────────
+-- jdtls 1.60 hard-refuses to launch on anything below Java 21 ("jdtls requires
+-- at least Java 21", mason/packages/jdtls/bin/jdtls.py). Its launcher only
+-- honours $JAVA_HOME or bare `java` on PATH, so a Homebrew *keg-only* JDK (not
+-- symlinked into /Library/Java/JavaVirtualMachines, invisible to
+-- /usr/libexec/java_home) is never found and Java completion silently never
+-- works. Locate a real 21+ home ourselves and pass it explicitly.
+--
+-- jdtls itself must RUN on 21+; a project may still target an older release, so
+-- every JDK found gets registered as an available runtime below and the newest
+-- one is marked default.
+local jdk = require("config.jdk")
+local launcher_jdk = jdk.newest(21)
+
+if not launcher_jdk then
+  vim.notify(
+    "jdtls: no JDK 21+ found — Java completion/diagnostics will not work.\n"
+      .. "Install one (e.g. `brew install openjdk@21`, `apt install openjdk-21-jdk`) or set $JAVA_HOME.",
+    vim.log.levels.WARN
+  )
+end
+
+-- Lombok ships inside the Mason jdtls package. The old path
+-- (stdpath("data") .. "/lombok.jar") never existed, and because it was wired up
+-- with `and … or nil` it failed *silently* — so in every Lombok project the
+-- @Data/@Getter/@Builder/@Slf4j members were simply absent from completion and
+-- reported as unresolved symbols. Note java.jdt.ls.lombokSupport.enabled is a
+-- VS Code-only setting; standalone jdtls needs the -javaagent explicitly.
+local lombok_jar = vim.fn.stdpath("data") .. "/mason/packages/jdtls/lombok.jar"
+if vim.fn.filereadable(lombok_jar) == 0 then
+  lombok_jar = vim.fn.stdpath("data") .. "/mason/share/jdtls/lombok.jar"
+end
 local lombok_arg = vim.fn.filereadable(lombok_jar) == 1
   and "--jvm-arg=-javaagent:" .. lombok_jar
   or nil
+if not lombok_arg then
+  vim.notify("jdtls: lombok.jar not found — Lombok-generated members will be invisible", vim.log.levels.WARN)
+end
 
 -- Workspace dir must exist before jdtls starts; otherwise LaunchingPlugin can't save install info
 vim.fn.mkdir(workspace_dir, "p")
@@ -32,35 +83,69 @@ local config = {
       "--jvm-arg=-XX:+UseG1GC",
       "--jvm-arg=-XX:GCTimeRatio=4",
     }
+    if launcher_jdk then c[#c + 1] = "--java-executable=" .. launcher_jdk.path .. "/bin/java" end
     if lombok_arg then c[#c + 1] = lombok_arg end
     return c
   end)(),
 
-  root_dir = require("jdtls.setup").find_root({
-    ".git", "mvnw", "gradlew", "pom.xml", "build.gradle", "build.gradle.kts",
-  }) or vim.fn.getcwd(),
+  root_dir = root_dir,
 
   capabilities = capabilities,
 
   settings = {
     java = {
       configuration = {
-        runtimes = {
-          {
-            name = "JavaSE-21",
-            path = vim.fn.expand("~/.sdkman/candidates/java/current"),
-            default = true,
-          },
-        },
+        -- Built from the JDKs actually discovered above. The old hardcoded
+        -- ~/.sdkman/... path did not exist on this machine, so jdtls had no
+        -- registered runtime at all. `name` must be a real Eclipse execution
+        -- environment id, so it has to track each detected major version.
+        runtimes = jdk.runtimes(),
         -- Reimports the Gradle/Maven project model automatically whenever a
         -- build file changes (new deps, e.g. Lombok, resolve without having
         -- to remember to run :JdtUpdateConfig). Only costs anything at the
         -- moment a build file is actually saved, not continuously.
         updateBuildConfiguration = "automatic",
       },
+      import = {
+        gradle = {
+          -- Run the Gradle tooling API on a JDK we actually located. Gradle
+          -- otherwise inherits jdtls's own JVM, which is fine, but being
+          -- explicit keeps the daemon off a stray old PATH java.
+          java = { home = launcher_jdk and launcher_jdk.path or nil },
+          -- THE fix for "jdtls attaches but returns zero completions" in any
+          -- Gradle project that declares a toolchain, e.g.
+          --   java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }
+          -- (the default for a Spring Initializr project). Gradle's toolchain
+          -- auto-detection shares java_home's blind spot — it never looks in
+          -- Homebrew's keg-only prefixes — so the import died with
+          -- "Cannot find a Java installation on your machine matching:
+          -- {languageVersion=17, ...}. Toolchain download repositories have not
+          -- been configured." That aborts ':compileClasspath' resolution, so the
+          -- project imports with NO classpath: every symbol is unresolved and
+          -- completion returns nothing, while the server still looks healthy.
+          -- Handing Gradle the homes we found makes the toolchain resolvable
+          -- without needing a global ~/.gradle/gradle.properties.
+          --
+          -- This goes in `arguments` (Gradle *command-line* args) and NOT in
+          -- `jvmArguments`. Both are forwarded to Buildship, but jvmArguments
+          -- demonstrably never reached the daemon — with it set, the daemon still
+          -- reported `Assuming the daemon was started with following jvm opts:
+          -- [-Dfile.encoding=UTF-8, -Duser.country=US, -Duser.language=en,
+          -- -Duser.variant]` and the toolchain error persisted. As a Gradle CLI
+          -- argument it is exactly the `./gradlew -Dorg.gradle.java.
+          -- installations.paths=…` invocation that resolves the toolchain.
+          arguments = {
+            "-Dorg.gradle.java.installations.paths=" .. jdk.gradle_installation_paths(),
+          },
+        },
+      },
       eclipse = { downloadSources = true },
       maven = { downloadSources = true },
-      implementationsCodeLens = { enabled = true },
+      -- The real jdtls key is `java.implementationCodeLens` (singular) and it is
+      -- a string enum none|types|methods|all — NOT {enabled=bool}. The old
+      -- `implementationsCodeLens = { enabled = true }` matched nothing in
+      -- Preferences, so implementation lenses never rendered.
+      implementationCodeLens = "all",
       referencesCodeLens = { enabled = true },
       references = { includeDecompiledSources = true },
       inlayHints = { parameterNames = { enabled = "all" } },
@@ -79,18 +164,32 @@ local config = {
         },
       },
       signatureHelp = { enabled = true },
-      contentProvider = { preferred = "fernflower" },
+      -- The provider id registered in org.eclipse.jdt.ls.core's plugin.xml is
+      -- "fernflowerContentProvider"; plain "fernflower" matched nothing.
+      contentProvider = { preferred = "fernflowerContentProvider" },
       completion = {
+        -- This setting REPLACES jdtls's defaults rather than extending them, so
+        -- the previous short list silently dropped ArgumentMatchers (any()/eq()/
+        -- anyString(), used in nearly every Mockito test), Answers, Assumptions
+        -- and the JUnit 5 Dynamic* helpers from static-import completion.
+        -- Full upstream default list + hamcrest.
         favoriteStaticMembers = {
           "org.junit.Assert.*",
           "org.junit.Assume.*",
           "org.junit.jupiter.api.Assertions.*",
+          "org.junit.jupiter.api.Assumptions.*",
+          "org.junit.jupiter.api.DynamicContainer.*",
+          "org.junit.jupiter.api.DynamicTest.*",
           "org.mockito.Mockito.*",
+          "org.mockito.ArgumentMatchers.*",
+          "org.mockito.Answers.*",
           "org.hamcrest.Matchers.*",
         },
-        -- Google style doesn't group imports by package prefix — one ASCII-sorted
-        -- block per §3.3.3. A single "" entry means "everything, ungrouped".
-        importOrder = { "" },
+        -- Google style §3.3.3: static imports in their own block above the
+        -- single ASCII-sorted non-static block. jdtls prefixes static imports
+        -- with "#", so dropping that group (the old `{ "" }`) interleaved them
+        -- into the ordinary block instead of separating them.
+        importOrder = { "#", "" },
       },
       sources = {
         organizeImports = {
@@ -102,27 +201,27 @@ local config = {
   },
 
   on_attach = function(client, bufnr)
-    jdtls.setup.add_commands()
+    -- One augroup per buffer, so re-firing FileType java (:e, :e!, :JdtRestart,
+    -- and JdtlsClean's own `vim.cmd("edit")`) REPLACES these autocmds instead of
+    -- stacking another copy. Previously each reload added another blocking
+    -- format-on-save round trip, another full codeLens+resolve sweep per
+    -- BufEnter/InsertLeave/save, and another clear-namespace + extmark pass on
+    -- every keystroke via CursorMovedI — i.e. visible typing lag that got worse
+    -- the longer the session ran.
+    local group = vim.api.nvim_create_augroup("java_ftplugin_" .. bufnr, { clear = true })
 
     local map = function(keys, func, desc)
       vim.keymap.set("n", keys, func, { buffer = bufnr, desc = desc })
     end
 
-    -- Standard LSP
-    map("gd", "<cmd>Telescope lsp_definitions<CR>", "Go to definition")
-    map("gD", vim.lsp.buf.declaration, "Go to declaration")
-    map("gr", "<cmd>Telescope lsp_references<CR>", "Find references")
-    map("gi", "<cmd>Telescope lsp_implementations<CR>", "Find implementations")
-    map("<leader>ds", "<cmd>Telescope lsp_document_symbols<CR>", "Document symbols")
-    map("<leader>ws", "<cmd>Telescope lsp_dynamic_workspace_symbols<CR>", "Workspace symbols")
-    map("<leader>lc", vim.lsp.buf.incoming_calls, "Incoming calls (callers)")
-    map("<leader>lC", vim.lsp.buf.outgoing_calls, "Outgoing calls (callees)")
-    map("K", vim.lsp.buf.hover, "Hover docs")
-    map("<C-k>", vim.lsp.buf.signature_help, "Signature help")
-    map("<leader>rn", vim.lsp.buf.rename, "Rename symbol")
-    map("<leader>ca", vim.lsp.buf.code_action, "Code action")
-    map("[d", vim.diagnostic.goto_prev, "Prev diagnostic")
-    map("]d", vim.diagnostic.goto_next, "Next diagnostic")
+    -- The standard LSP keymaps (gd/gD/gr/gi/K/<C-k>/<leader>rn/<leader>ca/
+    -- [d/]d/<leader>d/<leader>lt/<leader>ls/<leader>lw/<leader>lc/<leader>lC and
+    -- inlay hints) now come from the shared LspAttach handler in
+    -- lua/plugins/lsp.lua, which fires for jdtls too. They used to be
+    -- re-implemented here because jdtls starts via vim.lsp.start (which ignores
+    -- vim.lsp.config("*")), but that duplication had drifted: it bound
+    -- <leader>ds/<leader>ws instead of <leader>ls/<leader>lw, omitted <leader>d
+    -- and <leader>lt, never enabled inlay hints, and mapped gD unconditionally.
 
     -- Java-specific
     map("<F9>",  jdtls.organize_imports,        "Organize imports")
@@ -175,6 +274,7 @@ local config = {
 
     -- Format on save
     vim.api.nvim_create_autocmd("BufWritePre", {
+      group = group,
       buffer = bufnr,
       callback = function()
         vim.lsp.buf.format({ async = false, id = client.id })
@@ -245,10 +345,17 @@ local config = {
       -- just reading code — real, avoidable, recurring CPU cost. BufEnter/
       -- InsertLeave/BufWritePost are meaningful state changes; idling isn't.
       vim.api.nvim_create_autocmd({ "BufEnter", "InsertLeave", "BufWritePost" }, {
+        group = group,
         buffer = bufnr,
         callback = fetch_codelens,
       })
-      vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
+      -- CursorMovedI deliberately omitted: re-rendering the cursor-line lens on
+      -- every keystroke costs a clear-namespace + extmark pass per character
+      -- while typing (and while a completion menu is open) to show a lens for a
+      -- line you are actively editing. CursorMoved covers normal-mode movement,
+      -- and InsertLeave above re-fetches on exit.
+      vim.api.nvim_create_autocmd("CursorMoved", {
+        group = group,
         buffer = bufnr,
         callback = render_cursor_lens,
       })
@@ -272,10 +379,8 @@ local config = {
       end, "Run code lens")
     end
 
-    -- Inlay hints (parameter names) can get noisy in heavily-chained code
-    map("<leader>uh", function()
-      vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }), { bufnr = bufnr })
-    end, "Toggle inlay hints")
+    -- <leader>uh (toggle inlay hints) and the initial enable come from the
+    -- shared LspAttach handler.
 
     vim.keymap.set("v", "<leader>jv", function()
       jdtls.extract_variable(true)
@@ -322,6 +427,20 @@ local config = {
     end)(),
   },
 }
+
+-- Hand jdtls the SAME settings at initialize time, not just afterwards.
+--
+-- `config.settings` alone only reaches the server via workspace/
+-- didChangeConfiguration, which nvim sends *after* initialize has returned — by
+-- which point jdtls has already kicked off its first project import. So the
+-- initial Gradle/Maven import ran with default preferences and kept failing
+-- ("Cannot find a Java installation ... matching {languageVersion=17}") even
+-- with the toolchain paths configured above; the later didChangeConfiguration
+-- did not retry the import, so the project stayed classpath-less and completion
+-- returned nothing. jdtls's BaseInitHandler reads a `settings` key out of
+-- initializationOptions, so pointing it at the same table makes the very first
+-- import see java.import.gradle.jvmArguments / configuration.runtimes.
+config.init_options.settings = config.settings
 
 -- Use workspace_dir so each project gets its own jdtls instance
 -- Note: jdtls launcher uses single-dash -data (not --data)

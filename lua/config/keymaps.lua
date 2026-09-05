@@ -64,8 +64,12 @@ map("n", "<C-.>", code_action, { desc = "Code action (VS Code-style quick fix)" 
 map("n", "<F12>", "<cmd>Telescope lsp_definitions<CR>", { desc = "Go to definition" })
 
 -- ── Diagnostics ────────────────────────────────────────────────────────────
-map("n", "]d",   vim.diagnostic.goto_next,              { desc = "Next diagnostic" })
-map("n", "[d",   vim.diagnostic.goto_prev,              { desc = "Prev diagnostic" })
+-- vim.diagnostic.goto_next/goto_prev are deprecated and slated for removal in
+-- nvim 0.13; vim.diagnostic.jump is the replacement. (lsp.lua's on_attach binds
+-- buffer-local [d/]d the same way — these globals are the fallback for buffers
+-- with no LSP client attached.)
+map("n", "]d", function() vim.diagnostic.jump({ count = 1,  float = true }) end, { desc = "Next diagnostic" })
+map("n", "[d", function() vim.diagnostic.jump({ count = -1, float = true }) end, { desc = "Prev diagnostic" })
 map("n", "<M-e>", vim.diagnostic.open_float,            { desc = "Show diagnostic detail" })
 map("n", "<M-x>", "<cmd>Trouble diagnostics toggle<CR>",{ desc = "Diagnostics list" })
 
@@ -101,13 +105,17 @@ local ai = function(fn) return function() require("claude_cli")[fn]() end end
 
 map("n", "<C-g>",  ai("toggle_chat"),    { desc = "AI: Toggle Claude panel" })
 map("n", "<C-a>",  ai("prompt"),         { desc = "AI: Ask Claude anything" })
--- Visual mode — select code first, then press the shortcut
-map("v", "<C-1>",  ai("explain"),        { desc = "AI: Explain code" })
-map("v", "<C-2>",  ai("refactor"),       { desc = "AI: Refactor code" })
-map("v", "<C-3>",  ai("generate_tests"), { desc = "AI: Generate tests" })
-map("v", "<C-4>",  ai("fix"),            { desc = "AI: Fix code" })
-map("v", "<C-5>",  ai("generate_docs"),  { desc = "AI: Generate docs" })
-map("v", "<C-6>",  ai("ask_about"),      { desc = "AI: Ask about selection" })
+-- Visual mode — select code first, then press the shortcut.
+-- Mode "x" (visual), NOT "v". "v" means visual + SELECT mode, and select mode is
+-- what LuaSnip puts you in when it selects a snippet placeholder: there, any
+-- printable key is supposed to replace the selection. A "v" mapping hijacks that,
+-- so typing over a placeholder ran these commands instead of editing the text.
+map("x", "<C-1>",  ai("explain"),        { desc = "AI: Explain code" })
+map("x", "<C-2>",  ai("refactor"),       { desc = "AI: Refactor code" })
+map("x", "<C-3>",  ai("generate_tests"), { desc = "AI: Generate tests" })
+map("x", "<C-4>",  ai("fix"),            { desc = "AI: Fix code" })
+map("x", "<C-5>",  ai("generate_docs"),  { desc = "AI: Generate docs" })
+map("x", "<C-6>",  ai("ask_about"),      { desc = "AI: Ask about selection" })
 
 -- ── Git ────────────────────────────────────────────────────────────────────
 -- Alt+G = LazyGit (set in plugins/terminal.lua)
@@ -121,9 +129,12 @@ map("n", "<M-z>", "<cmd>Gitsigns preview_hunk<CR>", { desc = "Git: Preview hunk"
 -- F11 → Run all tests in class  (overrides global F11 = DAP UI)
 
 -- ── Editing helpers ────────────────────────────────────────────────────────
--- Move selected lines up/down in visual mode
-map("v", "J", ":m '>+1<CR>gv=gv", { silent = true, desc = "Move selection down" })
-map("v", "K", ":m '<-2<CR>gv=gv", { silent = true, desc = "Move selection up" })
+-- Move selected lines up/down in visual mode.
+-- "x" not "v": with "v" these also bound SELECT mode, where J/K are ordinary
+-- printable characters — so typing J or K over a LuaSnip placeholder moved lines
+-- around instead of replacing the placeholder text.
+map("x", "J", ":m '>+1<CR>gv=gv", { silent = true, desc = "Move selection down" })
+map("x", "K", ":m '<-2<CR>gv=gv", { silent = true, desc = "Move selection up" })
 
 -- Move current line up/down in normal mode (no selection needed)
 map("n", "<M-j>", ":m .+1<CR>==", { silent = true, desc = "Move line down" })
@@ -139,7 +150,7 @@ map("n", "N", "Nzzzv")
 map("x", "<C-S-p>", '"_dP', { desc = "Paste without overwriting register" })
 
 -- Copy to system clipboard
-map({ "n", "v" }, "<C-y>", '"+y', { desc = "Copy to system clipboard" })
+map({ "n", "x" }, "<C-y>", '"+y', { desc = "Copy to system clipboard" })
 map("n", "<C-S-y>", '"+Y',        { desc = "Copy line to system clipboard" })
 
 -- ── Comment (Ctrl+/) ───────────────────────────────────────────────────────
@@ -154,9 +165,9 @@ local comment_visual = function()
 end
 
 map("n", "<C-_>", comment_line,    { desc = "Toggle comment" })
-map("v", "<C-_>", comment_visual,  { desc = "Toggle comment" })
+map("x", "<C-_>", comment_visual,  { desc = "Toggle comment" })
 map("n", "<C-/>", comment_line,    { desc = "Toggle comment" })
-map("v", "<C-/>", comment_visual,  { desc = "Toggle comment" })
+map("x", "<C-/>", comment_visual,  { desc = "Toggle comment" })
 
 -- Clear search highlight
 map("n", "<Esc>", ":nohlsearch<CR>", { silent = true })

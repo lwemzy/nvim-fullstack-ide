@@ -20,7 +20,32 @@ return {
       -- which gets baked in permanently and produces a malformed "file://"
       -- URI (crashing the server on every document event) for the rest of
       -- the session.
+      -- Without this, the Spring Boot Language Server never starts at all.
+      -- spring_boot.launch builds its command as
+      --   { config.java_cmd or util.java_bin(), ..., "-XX:+UseZGC", ... }
+      -- (launch.lua:32-35) and util.java_bin() returns the bare string "java"
+      -- (util.lua:27) whenever $JAVA_HOME is unset — i.e. whatever `java` PATH
+      -- happens to resolve to. On this machine that is a Java 8 JRE, and ZGC
+      -- does not exist before 11, so the JVM aborts immediately:
+      --   Unrecognized VM option 'UseZGC'
+      --   Error: Could not create the Java Virtual Machine.
+      -- vim.lsp.start then has nothing to talk to. The failure is invisible
+      -- unless you read ~/.local/state/nvim/lsp.log, and the symptom is simply
+      -- that NOTHING attaches to application.properties and Spring property /
+      -- YAML key completion never appears. Pin a JDK we actually verified.
+      -- boot-ls needs 17+; ask for the newest such JDK.
+      local java_cmd = require("config.jdk").java_bin(17)
+      if not java_cmd then
+        vim.notify(
+          "spring-boot: no JDK 17+ found — Spring property completion disabled.\n"
+            .. "Install one (e.g. `brew install openjdk@21`) or set $JAVA_HOME.",
+          vim.log.levels.WARN
+        )
+        return
+      end
+
       local resolved_opts = require("spring_boot").setup({
+        java_cmd = java_cmd,
         -- autocmd=false: the plugin's own FileType autocmd starts boot-ls on
         -- *every* .java file unconditionally (it only filename-gates .yaml/
         -- .jproperties, checking they're actually application.yml/
