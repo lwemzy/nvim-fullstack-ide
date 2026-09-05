@@ -38,6 +38,20 @@ map("n", "<C-Up>",    ":resize +2<CR>",          { silent = true, desc = "Resize
 map("n", "<C-Down>",  ":resize -2<CR>",          { silent = true, desc = "Resize split shorter" })
 map("n", "<C-Left>",  ":vertical resize -2<CR>", { silent = true, desc = "Resize split narrower" })
 map("n", "<C-Right>", ":vertical resize +2<CR>", { silent = true, desc = "Resize split wider" })
+-- The four above are dead keys on this platform, and both obvious alternates are
+-- taken: macOS claims plain Ctrl+arrow for Mission Control (switch Spaces /
+-- Exposé) at the OS level, and Ghostty hard-binds Cmd+arrow to shell readline
+-- (start/end-of-line) and scrollback prompt-jump — so neither ever reaches nvim.
+-- Ctrl+Shift+arrow is unclaimed by both and is the one that actually arrives
+-- (Ghostty's side verified against `ghostty +show-config --default`).
+--
+-- Ctrl+arrow is left in place rather than replaced: these mappings cost nothing
+-- when the keys never fire, and keeping them means this file stays a superset of
+-- main's rather than a divergence, so future merges only ever add.
+map("n", "<C-S-Up>",    ":resize +2<CR>",          { silent = true, desc = "Resize split taller (macOS)" })
+map("n", "<C-S-Down>",  ":resize -2<CR>",          { silent = true, desc = "Resize split shorter (macOS)" })
+map("n", "<C-S-Left>",  ":vertical resize -2<CR>", { silent = true, desc = "Resize split narrower (macOS)" })
+map("n", "<C-S-Right>", ":vertical resize +2<CR>", { silent = true, desc = "Resize split wider (macOS)" })
 
 -- ── File explorer ──────────────────────────────────────────────────────────
 -- overrides: C-e (scroll 1 line) — use C-d/C-u for scrolling instead
