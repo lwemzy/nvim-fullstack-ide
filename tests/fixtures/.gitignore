@@ -1,0 +1,11 @@
+# Fixtures are inputs, never build outputs. Opening one of these trees with a
+# real jdtls or running gradle in it leaves .gradle/, .project and .settings/
+# behind — and a committed .project is not inert: jdtls treats the tree as an
+# already-imported Eclipse project, so a spec's behaviour would depend on
+# whatever an earlier debugging session happened to leave here.
+.gradle/
+.settings/
+.project
+.classpath
+build/
+bin/
