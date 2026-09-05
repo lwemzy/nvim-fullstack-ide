@@ -1,0 +1,7 @@
+{
+  "name": "pkgjson-fixture",
+  "version": "1.0.0",
+  "prettier": {
+    "singleQuote": true
+  }
+}
