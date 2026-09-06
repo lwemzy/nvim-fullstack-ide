@@ -81,6 +81,25 @@ map("n", "<M-x>", "<cmd>Trouble diagnostics toggle<CR>",{ desc = "Diagnostics li
 -- F8  = Step out
 -- NOTE: Java ftplugin overrides F9/F10/F11 with test shortcuts (buffer-local)
 
+-- ── Run / Debug the project (leader+r) ─────────────────────────────────────
+-- The keyboard half of the toolbar in the statusline (lua/config/runner.lua,
+-- spliced into lualine in plugins/ui.lua); :Run / :RunStop / … do the same. The
+-- runner picks the target from the current buffer, so these work the same in a
+-- Spring, plain-Java, Angular or node project — and in a monorepo containing
+-- several, they act on the one the open file belongs to.
+--
+-- leader+r, not more F-keys or Ctrl+Shift combos: F5-F11 are already the DAP
+-- stepping keys (above), and a Ctrl+Shift+F-key can be claimed by the terminal
+-- emulator before Neovim sees it — the same reason leader+/ is the grep key.
+-- No conflict with <leader>rn (lsp rename): that is buffer-local to an attached
+-- LSP client, and which-key shows both.
+local run = function(action) return function() require("config.runner").dispatch(action) end end
+map("n", "<leader>rr", run("run"),     { desc = "Run project" })
+map("n", "<leader>rR", run("restart"), { desc = "Restart project" })
+map("n", "<leader>rs", run("stop"),    { desc = "Stop project" })
+map("n", "<leader>rd", run("debug"),   { desc = "Debug project (attaches automatically)" })
+map("n", "<leader>ra", run("attach"),  { desc = "Attach debugger to a running process" })
+
 -- ── LSP navigation (standard vim keys — kept universal) ───────────────────
 -- gd  = definition     (also F12 above)
 -- gD  = declaration

@@ -321,6 +321,23 @@ Conventions worth following:
   final element**, so a complete line arrives as `{ line, "" }`. A fixture that
   omits the `""` means "this line is not finished yet" and the code under test is
   right to hold it — an easy way to write a test that fails against working code.
+- **A terminal buffer has a name**, `term://<cwd>//<pid>:<cmd>`. So "does this
+  buffer have a name?" is not a test for "is this a file?" — `buftype == ""` is the
+  load-bearing half. `config.runner` answered detection from `dirname` of that
+  fake path, which is how the toolbar went blank inside its own run terminal while
+  45 headless assertions passed.
+- **Headless lualine writes a *literal* rendered string into `'statusline'`**, not
+  an expression, and only at refresh time — with no UI attached it also never marks
+  a window focused, so the value is often just `%#lualine_transparent#`. Reading
+  `vim.o.statusline` therefore reports whatever the *previous* refresh saw, which
+  made a toolbar assertion pass or fail by case order (it saw an earlier case's live
+  process, complete with its Stop button). Render
+  `require("lualine").statusline(true)` through `nvim_eval_statusline` instead, and
+  widen `columns` first so lualine's `%<` truncation cannot decide the assertion.
+- **`nvim_buf_delete` on a terminal buffer signals the job but does not wait for
+  it**, so a `sleep 30` from one case can still poll as running in the next.
+  `vim.fn.jobwait({ id }, 2000)` after `jobstop` is the only synchronous point;
+  cleanup that only deletes buffers leaks running state between cases.
 
 ## Config bugs these tests found
 
@@ -528,6 +545,36 @@ and each is now pinned by a case that fails when the fix is reverted.
   streaming version blanked the placeholder on the CLI's session-init events,
   seconds before any token, which reads as a hang rather than as progress. —
   `claude_cli_spec`
+
+### Found while building the Run/Debug toolbar, fixed here
+
+`lua/config/runner.lua` replaced a single `<F3>` "Spring Boot: Run" mapping. What
+it replaced, and what building it surfaced:
+
+- **`<F3>` chose between `mvnw` and `gradlew` with a CWD-relative
+  `filereadable()`.** Opening nvim one directory above the project — or anywhere
+  in a multi-module build, where the wrapper lives at the repository root — ran the
+  wrong wrapper or refused to run while the project was plainly open. Every
+  detection case now asks from a buffer *inside* a tree with the cwd deliberately
+  elsewhere, and the command is absolute and `shellescape`d. — `runner_spec` (unit)
+- **It kept no process handle**, so there was no Restart and no Stop: the way to
+  stop a `bootRun` was to find its terminal and press `<C-c>`. — `runner_spec`
+  (integration)
+- **Detection went blank inside the run's own terminal.** Run opens a terminal and
+  moves focus there; that buffer *has* a name (`term://…`), so a name-only "is this
+  a file?" check accepted it, `dirname` produced a path that does not exist, and
+  `Stop` answered "No run target here" with the build on screen while the process
+  kept running. Found by running a real `gradlew bootRun` by hand after 45 headless
+  assertions passed. Now `buftype == ""` plus a fallback chain (alternate file → any
+  window's file buffer → cwd), pinned in both tiers. — `runner_spec`
+- **The build inherited nvim's `JAVA_HOME`, and failed before it read the
+  project.** On a machine with no `JAVA_HOME` and a Java 8 on `PATH` — or a version
+  manager configured only for interactive shells — `gradlew bootRun` dies with
+  "Gradle requires JVM 17 or later to run. Your build is currently configured to use
+  JVM 8" while jdtls indexes the same project on a Java 25 it found for itself.
+  Nothing in that message suggests the editor could have fixed it. The run terminal
+  now gets `JAVA_HOME` from `config.jdk` when the inherited one cannot work, and is
+  left alone when it can. — `runner_spec` (integration), `jdk_spec`
 
 ### Still pinned, deliberately not fixed
 

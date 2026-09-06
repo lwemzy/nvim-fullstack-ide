@@ -142,6 +142,28 @@ function M.list()
   return cached
 end
 
+-- The major version a child process would run on if we changed nothing about its
+-- environment: $JAVA_HOME when set (Gradle, Maven and both wrappers consult it
+-- before PATH), then $JDK_HOME, then whatever bare `java` resolves to. nil when
+-- none of them is a usable JDK.
+--
+-- Distinct from M.list(), which answers "what is installed here". This answers
+-- "what would actually run", which is the question that decides whether a build
+-- launched from inside nvim needs JAVA_HOME corrected for it: nvim's terminals
+-- inherit nvim's environment, and a JAVA_HOME left on an old JRE fails a Gradle
+-- build before it reads the project ("Gradle requires JVM 17 or later to run").
+function M.env_major()
+  local home = vim.env.JAVA_HOME
+  if not home or home == "" then home = vim.env.JDK_HOME end
+  if not home or home == "" then
+    local exe = vim.fn.exepath("java")
+    if exe == "" then return nil end
+    home = vim.fn.fnamemodify(vim.fn.resolve(exe), ":h:h")
+  end
+  local resolved = resolve_home((home:gsub("/+$", "")))
+  return resolved and jdk_major(resolved) or nil
+end
+
 -- Long-term-support majors: 8, 11 and 17, then every fourth release from 21
 -- (21, 25, 29, …), which is the two-year cadence Oracle has committed to.
 -- Encoded as a rule and not a list so a release that lands after this config was

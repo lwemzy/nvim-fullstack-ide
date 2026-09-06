@@ -261,5 +261,107 @@ describe("config.project", function()
       assert.same({}, project.find_upward(bufnr, ".prettierrc"))
       assert.equals(1, vim.fn.filereadable(above))
     end)
+
+    describe("searching from a directory instead of a buffer", function()
+      -- config.runner needs this form: "which project am I looking at?" has to be
+      -- answerable while a buffer with no file name is focused — a terminal, the
+      -- Claude panel, the dashboard — where the cwd is the only thing that says
+      -- which project the user is in.
+      it("accepts a directory path in place of a buffer number", function()
+        local root, _ = repo("dir-form", "src/deep")
+        local marker = H.write(root .. "/.prettierrc", { "{}" })
+        same_path(marker, assert(project.find_upward(root .. "/src/deep", ".prettierrc")[1]))
+      end)
+
+      it("bounds a directory search exactly as it bounds a buffer's", function()
+        -- The bound is the whole point of this module, so the new entry point must
+        -- not be a way around it.
+        local container = H.tmpdir("dir-form-bound")
+        local root = container .. "/repo"
+        vim.fn.mkdir(root .. "/src", "p")
+        vim.fn.mkdir(root .. "/.git", "p")
+        local above = H.write(container .. "/.prettierrc", { "{}" })
+        assert.same({}, project.find_upward(root .. "/src", ".prettierrc"))
+        assert.equals(1, vim.fn.filereadable(above))
+      end)
+
+      it("finds nothing for a buffer with no name, which is why the string form exists", function()
+        -- Unchanged behaviour, and depended on by every other caller: an unnamed
+        -- buffer has no directory of its own, and guessing the cwd for all of them
+        -- would hand loose scratch buffers whatever project the shell was in.
+        assert.same({}, project.find_upward(H.scratch(), ".prettierrc"))
+      end)
+    end)
+  end)
+
+  describe("java_build_files", function()
+    it("returns every build file up to the project root, nearest first", function()
+      -- Nearest first is what lets config.runner run Gradle/Maven in the module
+      -- the open file belongs to; the outer ones still matter because a
+      -- multi-module build declares its dependencies in the parent.
+      local root = H.tmpdir("java-modules")
+      vim.fn.mkdir(root .. "/.git", "p")
+      H.write(root .. "/pom.xml", { "<project/>" })
+      H.write(root .. "/api/pom.xml", { "<project/>" })
+      local found = project.java_build_files(root .. "/api/src/main/java")
+      assert.equals(2, #found)
+      same_path(root .. "/api/pom.xml", found[1])
+      same_path(root .. "/pom.xml", found[2])
+    end)
+
+    it("recognises Gradle's Kotlin DSL as well as Groovy", function()
+      local root = H.tmpdir("java-kts")
+      vim.fn.mkdir(root .. "/.git", "p")
+      local build = H.write(root .. "/build.gradle.kts", { "plugins {}" })
+      same_path(build, assert(project.java_build_files(root .. "/src")[1]))
+    end)
+  end)
+
+  describe("declares_spring_boot", function()
+    -- Shared by lua/plugins/java.lua (start the Spring Boot Language Server?) and
+    -- config.runner (offer bootRun, or a plain main class?). The two disagreeing
+    -- would mean a project whose properties complete but whose Run button runs the
+    -- wrong thing, which is why there is one implementation.
+    local function project_with(files)
+      local root = H.tmpdir("spring-detect")
+      vim.fn.mkdir(root .. "/.git", "p")
+      for name, contents in pairs(files) do
+        H.write(root .. "/" .. name, contents)
+      end
+      return root
+    end
+
+    it("sees the Gradle plugin id", function()
+      local root = project_with({
+        ["build.gradle"] = { "plugins { id 'org.springframework.boot' version '3.3.4' }" },
+      })
+      assert.is_true(project.declares_spring_boot(root .. "/src/main/java"))
+    end)
+
+    it("sees a Maven parent that the module inherits", function()
+      -- The module's own pom says nothing about Spring; stopping at the nearest
+      -- build file is how boot-ls used to miss multi-module projects entirely.
+      local root = project_with({
+        ["pom.xml"] = { "<parent><groupId>org.springframework.boot</groupId></parent>" },
+        ["api/pom.xml"] = { "<project><artifactId>api</artifactId></project>" },
+      })
+      assert.is_true(project.declares_spring_boot(root .. "/api/src/main/java"))
+    end)
+
+    it("is false for a Java project that is not Spring", function()
+      local root = project_with({ ["build.gradle"] = { "plugins { id 'application' }" } })
+      assert.is_false(project.declares_spring_boot(root .. "/src/main/java"))
+    end)
+
+    it("ignores a Spring build file above the project root", function()
+      -- The original bug: an unbounded search made every loose .java file on the
+      -- machine look like a Spring project because of one pom.xml in $HOME.
+      local container = H.tmpdir("spring-above")
+      local root = container .. "/repo"
+      vim.fn.mkdir(root .. "/src", "p")
+      vim.fn.mkdir(root .. "/.git", "p")
+      H.write(container .. "/pom.xml", { "<groupId>org.springframework.boot</groupId>" })
+      assert.is_false(project.declares_spring_boot(root .. "/src"))
+    end)
   end)
 end)

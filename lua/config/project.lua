@@ -48,6 +48,22 @@ local function home()
   return resolve(h)
 end
 
+--- The directory a search starts from: a buffer's own directory, or `source`
+--- itself when it is already a directory path.
+---
+--- The string form exists for config.runner, whose question ("which project am I
+--- looking at?") has to be answerable from a buffer that has no file name at all
+--- — a terminal, the Claude panel, the dashboard — where the cwd is the only
+--- thing that says which project the user is in. Returning nil for the nameless
+--- case is what the file-name form does instead, and every caller of that one
+--- depends on it (see find_upward below).
+local function start_dir(source)
+  if type(source) == "string" then return resolve(source) end
+  local name = vim.api.nvim_buf_get_name(source or 0)
+  if name == "" then return nil end
+  return resolve(vim.fs.dirname(name))
+end
+
 --- The directory to stop at, exclusive: `stop` is never itself searched.
 ---
 --- The parent of the VCS root, so the search covers the whole project and nothing
@@ -67,11 +83,14 @@ end
 --- immediately above such a project is read as its parent module. With no VCS
 --- root the two are indistinguishable on disk, so this picks the reading that
 --- breaks real projects less often.
-function M.ceiling(bufnr, fallback_markers)
-  bufnr = bufnr or 0
+---
+--- `source` is a buffer number (default: the current buffer) or a directory path.
+function M.ceiling(source, fallback_markers)
   local h = home()
 
-  local root = vim.fs.root(bufnr, { ".git", ".hg", ".svn" })
+  -- vim.fs.root takes either form itself, and for a buffer with no name it falls
+  -- back to the cwd — which is the same answer start_dir's string form gives.
+  local root = vim.fs.root(source or 0, { ".git", ".hg", ".svn" })
   if root then
     root = resolve(root)
     -- Not `root ~= h`: a VCS root that is an *ancestor* of $HOME (`/` under
@@ -82,7 +101,7 @@ function M.ceiling(bufnr, fallback_markers)
   end
 
   if fallback_markers then
-    local found = M.find_upward(bufnr, fallback_markers, { limit = math.huge }, h)
+    local found = M.find_upward(source, fallback_markers, { limit = math.huge }, h)
     local outermost = found[#found]
     if outermost then return vim.fs.dirname(vim.fs.dirname(outermost)) end
   end
@@ -92,16 +111,15 @@ end
 
 --- vim.fs.find upward from the buffer's own directory, bounded by M.ceiling.
 ---
---- `opts.limit` is passed through to vim.fs.find; `opts.fallback_markers` is
---- forwarded to M.ceiling. `stop` overrides the ceiling outright and exists so
---- M.ceiling can call this without recursing.
-function M.find_upward(bufnr, names, opts, stop)
-  bufnr = bufnr or 0
-  local name = vim.api.nvim_buf_get_name(bufnr)
-  if name == "" then return {} end
-  local dir = resolve(vim.fs.dirname(name))
+--- `source` is a buffer number (default: the current buffer) or a directory to
+--- search from. `opts.limit` is passed through to vim.fs.find;
+--- `opts.fallback_markers` is forwarded to M.ceiling. `stop` overrides the ceiling
+--- outright and exists so M.ceiling can call this without recursing.
+function M.find_upward(source, names, opts, stop)
+  local dir = start_dir(source or 0)
+  if not dir then return {} end
   opts = opts or {}
-  stop = stop or M.ceiling(bufnr, opts.fallback_markers)
+  stop = stop or M.ceiling(source, opts.fallback_markers)
 
   -- vim.fs.find tests `path` itself BEFORE it starts comparing parents against
   -- `stop` (runtime/lua/vim/fs.lua), so the starting directory is searched even
@@ -113,6 +131,48 @@ function M.find_upward(bufnr, names, opts, stop)
   -- overrode `stop` or `path` would be opting out of the bound, which is the one
   -- thing this function is for.
   return vim.fs.find(names, { path = dir, upward = true, stop = stop, limit = opts.limit })
+end
+
+-- ── Java build files ────────────────────────────────────────────────────────
+
+--- The build files that mark a Java project, in the order vim.fs.find matches
+--- them. Also usable as `fallback_markers`: a Java project with no version
+--- control has nothing else to say where it begins, and without them the search
+--- is unbounded for one that also sits outside $HOME.
+M.JAVA_BUILD_FILES = { "pom.xml", "build.gradle", "build.gradle.kts" }
+
+--- Every Java build file from `source` up to the project root, nearest first.
+---
+--- limit = math.huge rather than the nearest one, because a multi-module build
+--- declares its dependencies (and its Spring Boot plugin) in the parent: stopping
+--- at the module reads a file that inherits everything interesting.
+function M.java_build_files(source)
+  return M.find_upward(source, M.JAVA_BUILD_FILES, {
+    limit = math.huge,
+    fallback_markers = M.JAVA_BUILD_FILES,
+  })
+end
+
+--- Does any build file above `source` actually declare Spring Boot?
+---
+--- Checks build.gradle/build.gradle.kts/pom.xml content for the
+--- org.springframework.boot group id, which is present as either a Gradle plugin
+--- id or a Maven/Gradle dependency coordinate in essentially every real Spring
+--- Boot project.
+---
+--- Shared by two callers that must agree: lua/plugins/java.lua decides whether to
+--- start the Spring Boot Language Server for a .java buffer, and config.runner
+--- decides whether the toolbar offers `bootRun`/`spring-boot:run` instead of a
+--- plain main-class launch. Two copies of this heuristic would drift into a
+--- project whose properties complete but whose Run button runs the wrong thing.
+function M.declares_spring_boot(source)
+  for _, file in ipairs(M.java_build_files(source)) do
+    local ok, lines = pcall(vim.fn.readfile, file)
+    if ok and table.concat(lines, "\n"):find("org%.springframework%.boot") then
+      return true
+    end
+  end
+  return false
 end
 
 return M

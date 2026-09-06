@@ -18,7 +18,19 @@ return {
           lualine_a = { "mode" },
           lualine_b = { "branch", "diff", "diagnostics" },
           lualine_c = { { "filename", path = 1 } },
-          lualine_x = { "encoding", "fileformat", "filetype" },
+          -- The Run / Restart / Stop / Debug toolbar (lua/config/runner.lua).
+          -- Here rather than in a bar of its own: laststatus = 3 +
+          -- globalstatus already make this line a single persistent one for the
+          -- whole editor, and mouse = "a" makes lualine's per-component on_click
+          -- really clickable — so the toolbar costs no screen line at all.
+          --
+          -- lualine_x rather than lualine_c because lualine_c's width moves with
+          -- the file path, and a button that slides sideways when you switch
+          -- files is a button that gets misclicked.
+          lualine_x = vim.list_extend(
+            require("config.runner").components(),
+            { "encoding", "fileformat", "filetype" }
+          ),
           lualine_y = { "progress" },
           lualine_z = { "location" },
         },
@@ -177,6 +189,7 @@ return {
         { "<leader>g", group = "git" },
         { "<leader>j", group = "java" },
         { "<leader>l", group = "lsp" },
+        { "<leader>r", group = "run / debug" },
         { "<leader>s", group = "split" },
         { "<leader>u", group = "ui toggles" },
         { "<leader>uq", group = "session" },

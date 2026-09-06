@@ -20,3 +20,9 @@ require("lazy").setup("plugins", {
   change_detection = { notify = false },
   ui = { border = "rounded" },
 })
+
+-- :Run / :RunStop / … and the statusline toolbar's cache invalidation. After
+-- lazy.setup because the commands it registers are meant to be available in the
+-- same session as the plugins they eventually drive (toggleterm, dap, jdtls) —
+-- each of which it requires lazily, inside the action that needs it.
+require("config.runner").setup()

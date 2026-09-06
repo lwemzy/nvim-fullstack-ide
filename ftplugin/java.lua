@@ -295,36 +295,13 @@ local config = {
     map("<leader>du", function() require("dapui").toggle() end,          "Debug: Toggle UI")
     map("<leader>dr", function() require("dap").repl.toggle() end,       "Debug: Toggle REPL")
 
-    -- Run without attaching the debugger (plain `java -cp ...` launch via jdtls)
-    -- Opens dapui explicitly rather than relying on the global
-    -- event_initialized listener: noDebug launches don't reliably fire that
-    -- event the same way a real debug session does, so the panel showing
-    -- internalConsole output could otherwise never appear even though the
-    -- program genuinely ran (confirmed via jdtls logs: LaunchWithoutDebuggingDelegate
-    -- fires fine, nothing was actually broken except visibility).
+    -- Run without attaching the debugger (plain `java -cp ...` launch via jdtls).
+    -- The implementation is config.runner.main_class, which is also what the
+    -- toolbar's Run button uses for a project with no build-tool entry point — one
+    -- copy, so the button and the key cannot come to disagree about which main
+    -- class runs or how its output is shown.
     map("<leader>dR", function()
-      require("jdtls.dap").fetch_main_configs({
-        config_overrides = { noDebug = true, console = "internalConsole" },
-      }, function(configs)
-        vim.schedule(function()
-          if #configs == 0 then
-            vim.notify("No runnable main classes found", vim.log.levels.WARN)
-          elseif #configs == 1 then
-            require("dap").run(configs[1])
-            require("dapui").open()
-          else
-            vim.ui.select(configs, {
-              prompt = "Run (no debug):",
-              format_item = function(c) return c.name end,
-            }, function(choice)
-              if choice then
-                require("dap").run(choice)
-                require("dapui").open()
-              end
-            end)
-          end
-        end)
-      end)
+      require("config.runner").main_class("run")
     end, "Run without debugging")
 
     -- Format on save

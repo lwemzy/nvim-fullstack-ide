@@ -332,6 +332,56 @@ describe("config.jdk", function()
     end)
   end)
 
+  describe("env_major", function()
+    -- What a build launched from inside nvim would actually run on, which is what
+    -- decides whether the Run button has to correct JAVA_HOME for it.
+    it("reads the JDK $JAVA_HOME points at", function()
+      local jdk = jdk_with({})
+      H.stub(vim.env, "JAVA_HOME", make_jdk(root .. "/j8", "1.8.0_503"))
+      assert.equals(8, jdk.env_major())
+    end)
+
+    it("resolves the same odd layouts as discovery does", function()
+      -- A JAVA_HOME pointing at a Homebrew prefix or a .jdk bundle is common, and
+      -- reading it as "not a JDK" would silently skip the correction.
+      local jdk = jdk_with({})
+      make_jdk(root .. "/brew/libexec/openjdk.jdk/Contents/Home", "17.0.9")
+      H.write(root .. "/brew/bin/java", { "#!/bin/sh" })
+      vim.fn.setfperm(root .. "/brew/bin/java", "rwxr-xr-x")
+      H.stub(vim.env, "JAVA_HOME", root .. "/brew")
+      assert.equals(17, jdk.env_major())
+    end)
+
+    it("falls back to bare java on PATH when neither variable is set", function()
+      -- No JAVA_HOME at all is the normal state on macOS; PATH is what Gradle
+      -- would find.
+      local jdk = jdk_with({})
+      fake_path_java(make_jdk(root .. "/j25", "25.0.4"))
+      assert.equals(25, jdk.env_major())
+    end)
+
+    it("prefers $JAVA_HOME over PATH, the way the build tools do", function()
+      local jdk = jdk_with({})
+      fake_path_java(make_jdk(root .. "/j25", "25.0.4"))
+      H.stub(vim.env, "JAVA_HOME", make_jdk(root .. "/j8", "1.8.0_503"))
+      assert.equals(8, jdk.env_major())
+    end)
+
+    it("reads $JDK_HOME when $JAVA_HOME is unset", function()
+      local jdk = jdk_with({})
+      H.stub(vim.env, "JDK_HOME", make_jdk(root .. "/j21", "21.0.5"))
+      assert.equals(21, jdk.env_major())
+    end)
+
+    it("is nil when nothing usable would run", function()
+      -- Not 0 and not an error: the caller treats nil as "cannot work, correct
+      -- it", which is the right answer for a JAVA_HOME pointing at a deleted JDK.
+      local jdk = jdk_with({})
+      H.stub(vim.env, "JAVA_HOME", root .. "/gone")
+      assert.is_nil(jdk.env_major())
+    end)
+  end)
+
   describe("java_bin", function()
     it("returns bin/java of the newest matching JDK", function()
       local jdk = jdk_with({ make_jdk(root .. "/j21", "21.0.5") })

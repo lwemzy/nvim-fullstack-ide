@@ -109,6 +109,13 @@ local MAPPINGS = {
   { "n", "<M-e>", "Show diagnostic detail" },
   { "n", "<M-x>", "Diagnostics list" },
 
+  -- Run / debug the project (the keyboard half of the statusline toolbar).
+  { "n", "<leader>rr", "Run project" },
+  { "n", "<leader>rR", "Restart project" },
+  { "n", "<leader>rs", "Stop project" },
+  { "n", "<leader>rd", "Debug project" },
+  { "n", "<leader>ra", "Attach debugger" },
+
   -- Buffer tabs.
   { "n", "<S-l>", "Next buffer" },
   { "n", "<S-h>", "Prev buffer" },

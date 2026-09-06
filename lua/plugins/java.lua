@@ -70,15 +70,15 @@ return {
       })
       if not resolved_opts then return end -- boot-ls jar not installed; setup() already warned
 
-      -- Heuristic: does any build file from this buffer's directory up to
-      -- the project root actually declare Spring Boot? Checks build.gradle/
-      -- build.gradle.kts/pom.xml content for the org.springframework.boot
-      -- group id — present as either a Gradle plugin id or a Maven/Gradle
-      -- dependency coordinate in essentially every real Spring Boot project.
-      -- The bound matters: the previous `stop` was nil whenever vim.fs.root found
-      -- no marker — i.e. exactly the loose-file case it was meant to protect — so
-      -- the search ran to / and a stray pom.xml above the file (in $HOME, say)
-      -- made every .java buffer look like a Spring Boot project and started
+      -- Heuristic: does any build file from this buffer's directory up to the
+      -- project root actually declare Spring Boot? config.project.declares_spring_boot
+      -- (which is also what the Run/Debug toolbar in config.runner asks, so the
+      -- two cannot disagree about what a Spring project is).
+      --
+      -- The bound matters: the original `stop` here was nil whenever vim.fs.root
+      -- found no marker — i.e. exactly the loose-file case it was meant to protect
+      -- — so the search ran to / and a stray pom.xml above the file (in $HOME,
+      -- say) made every .java buffer look like a Spring Boot project and started
       -- boot-ls for it. config.project.ceiling is never nil-bounded.
       --
       -- It also bounds at the VCS root rather than the nearest build file, which
@@ -86,27 +86,9 @@ return {
       -- parent pom.xml declaring spring-boot (with the module inheriting it) was
       -- never read and boot-ls never started.
       local project = require("config.project")
-      local BUILD_FILES = { "pom.xml", "build.gradle", "build.gradle.kts" }
-      local function is_spring_boot_project(bufnr)
-        -- The build files double as the fallback root markers: a Java project with
-        -- no version control has nothing else to say where it begins, and without
-        -- them the search is unbounded for one that also sits outside $HOME.
-        local build_files = project.find_upward(
-          bufnr,
-          BUILD_FILES,
-          { limit = math.huge, fallback_markers = BUILD_FILES }
-        )
-        for _, f in ipairs(build_files) do
-          local ok, lines = pcall(vim.fn.readfile, f)
-          if ok and table.concat(lines, "\n"):find("org%.springframework%.boot") then
-            return true
-          end
-        end
-        return false
-      end
 
       local function maybe_start(bufnr)
-        if vim.bo[bufnr].filetype == "java" and not is_spring_boot_project(bufnr) then
+        if vim.bo[bufnr].filetype == "java" and not project.declares_spring_boot(bufnr) then
           return
         end
         -- setup()'s return value has no cmd/root_dir — those are only
