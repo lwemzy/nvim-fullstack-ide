@@ -103,7 +103,16 @@ return {
       require("ufo").setup({
         provider_selector = function(_, filetype, _)
           local map = {
-            java       = { "lsp", "indent" },
+            -- treesitter, not lsp: jdtls's FoldingRangeHandler hits a
+            -- long-standing JDT-core Scanner bug (source index -1 out of
+            -- bounds) on certain documents — eclipse.jdt.ls #990, #1419,
+            -- #1815, vscode-java #1644. ufo's lsp provider doesn't catch a
+            -- live RPC error from that request (only falls back to indent
+            -- when the server lacks the capability at all), so the crash
+            -- surfaced client-side as an unhandled promise rejection dump.
+            -- Not asking jdtls for folding ranges avoids the bug entirely;
+            -- the java treesitter parser is already ensure_installed.
+            java       = { "treesitter", "indent" },
             typescript = { "lsp", "indent" },
             javascript = { "lsp", "indent" },
             lua        = { "treesitter", "indent" },
