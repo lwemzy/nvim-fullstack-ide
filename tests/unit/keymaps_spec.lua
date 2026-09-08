@@ -266,6 +266,34 @@ describe("config.keymaps", function()
     end)
   end)
 
+  describe("core's gr-prefixed LSP defaults", function()
+    -- `gr` (LSP references, bound per-buffer in plugins/lsp.lua) is only instant
+    -- while nothing else starts with those two keys. nvim 0.11 added
+    -- grn/gra/grr/gri/grt/grx of its own, which made `gr` an ambiguous prefix:
+    -- every press then waits out 'timeoutlen' before firing, so the most-used
+    -- LSP jump in the config gained a 300ms stall that looks like a slow server.
+    it("deletes them, so `gr` is not an ambiguous prefix", function()
+      load_keymaps()
+      for _, lhs in ipairs({ "grn", "gra", "grr", "gri", "grt", "grx" }) do
+        assert.equals("", vim.fn.maparg(lhs, "n"), lhs .. " is still mapped in normal mode")
+      end
+      -- gra is mapped in visual mode too, and one survivor is enough to keep the
+      -- prefix ambiguous there.
+      assert.equals("", vim.fn.maparg("gra", "x"), "gra is still mapped in visual mode")
+    end)
+
+    it("leaves no other global gr-prefixed mapping behind", function()
+      -- The named six are today's defaults; the property that actually matters is
+      -- that nothing longer than `gr` shares its prefix, whoever adds it.
+      load_keymaps()
+      local prefixed = {}
+      for _, m in ipairs(vim.api.nvim_get_keymap("n")) do
+        if m.lhs:match("^gr") and m.lhs ~= "gr" then table.insert(prefixed, m.lhs) end
+      end
+      assert.same({}, prefixed)
+    end)
+  end)
+
   describe("window resize", function()
     it("binds <C-arrow> in normal mode to resize commands", function()
       -- The direction pairing is the easy thing to get wrong: vertical (height)

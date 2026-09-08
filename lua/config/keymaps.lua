@@ -1,5 +1,26 @@
 local map = vim.keymap.set
 
+-- ── Drop core's gr-prefixed LSP defaults (nvim 0.11+) ─────────────────────
+-- Neovim maps grn/gra/grr/gri/grt/grx (plus gra in visual mode) itself, in
+-- runtime/lua/vim/_defaults.lua. Every one of them shares a prefix with this
+-- config's own `gr` (references, bound per-buffer in plugins/lsp.lua's
+-- on_attach), which makes `gr` an *ambiguous* prefix: nvim then has to wait the
+-- full 'timeoutlen' (300ms here) on every press to learn whether a second key
+-- is coming, so jumping to references stalls first, every time.
+--
+-- Nothing is lost — each default already has an equivalent bound here or in
+-- plugins/lsp.lua: grn -> <leader>rn (and <F2>), gra -> <leader>ca (and
+-- <F4>/<C-.>), grr -> gr, gri -> gi, grt -> <leader>lt, grx -> <leader>cl
+-- (ftplugin/java.lua's own cursor-line code-lens runner; nothing in this config
+-- renders lenses through vim.lsp.codelens, so its run() had nothing to run).
+--
+-- pcall, not a bare del: deleting a mapping that was never set raises E31, and
+-- these are only there from 0.11 onwards.
+for _, lhs in ipairs({ "grn", "gra", "grr", "gri", "grt", "grx" }) do
+  pcall(vim.keymap.del, "n", lhs)
+end
+pcall(vim.keymap.del, "x", "gra")
+
 -- ── Window navigation (Ctrl + h/j/k/l) ────────────────────────────────────
 -- Normal mode
 map("n", "<C-h>", "<C-w>h", { desc = "Window left" })
