@@ -192,25 +192,41 @@ describe("lua/plugins specs", function()
       end
     end)
 
-    it("uses no Mac Cmd (<D-...>) lhs", function()
-      -- Project rule: this branch is the Windows/Linux config and its shortcuts
-      -- are Ctrl-based; Mac Cmd bindings live on a separate branch. A <D-...>
-      -- here is also dead weight on the platforms this branch targets, since
-      -- nothing outside macOS ever sends that keycode.
+    it("uses no Mac Cmd (<D-...>) lhs in a lazy keys entry", function()
+      -- Still the rule on this branch, for a different reason than on main. A
+      -- `keys` entry is not only a mapping, it is the plugin's lazy-load trigger:
+      -- a Cmd lhs there would make the plugin load on a keystroke only a Mac
+      -- keyboard can send. Mac aliases belong next to their portable twin inside
+      -- `config` (the way terminal.lua's <D-r> is), where the twin stays the
+      -- trigger and the alias is just another mapping.
       for _, k in ipairs(S.keys()) do
         assert.is_nil(k.lhs:find("<[dD]%-"), "Cmd binding in a keys entry: " .. describe_key(k))
       end
     end)
 
-    it("mentions no Cmd binding anywhere in the plugin or keymap sources", function()
-      -- The keys-entry check above misses every vim.keymap.set call inside a
-      -- `config` function (terminal.lua, tools.lua and treesitter.lua all map
-      -- keys that way) and all of lua/config/keymaps.lua, which is where a Mac
-      -- binding would most likely be added.
+    it("pairs every Cmd binding in the plugin sources with a portable one", function()
+      -- The inverse of main's rule, which forbids <D- outright. This is the
+      -- mac-config branch, so Cmd bindings are expected here — but only as
+      -- aliases, never as replacements, so that the config still works from a
+      -- non-Mac keyboard and a merge from main can only ever add lines.
+      --
+      -- lua/config/keymaps.lua is excluded because tests/unit/keymaps_spec.lua
+      -- checks it far more thoroughly, comparing each alias's actual rhs or
+      -- callback against its twin's rather than just the presence of both.
+      local MAC_ALIASES = { ["<D-r>"] = "<M-r>" }
+
       for _, file in ipairs(keymap_sources()) do
-        local text = read_text(file)
-        assert.is_nil(text:find("<[dD]%-"),
-          ("%s contains a Mac Cmd (<D-...>) binding"):format(file))
+        if not file:find("config/keymaps%.lua$") then
+          local text = read_text(file)
+          for lhs in text:gmatch('"(<[dD]%-[^"]*)"') do
+            local portable = MAC_ALIASES[lhs]
+            assert.is_string(portable,
+              ("%s maps %s with no portable equivalent declared for it"):format(file, lhs))
+            assert.is_not_nil(text:find('"' .. portable .. '"', 1, true),
+              ("%s maps %s but no longer maps %s, so the key is Mac-only"):format(
+                file, lhs, portable))
+          end
+        end
       end
     end)
   end)

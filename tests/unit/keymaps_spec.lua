@@ -73,25 +73,34 @@ local MAPPINGS = {
   { "t", "<C-k>", "Window up (from terminal)" },
   { "t", "<C-l>", "Window right (from terminal)" },
 
-  -- Split resize.
+  -- Split resize. Ctrl+Shift is the Mac alias: plain Ctrl+arrow is Mission
+  -- Control and Cmd+arrow is Ghostty's, so neither reaches nvim here.
   { "n", "<C-Up>", "Resize split taller" },
   { "n", "<C-Down>", "Resize split shorter" },
   { "n", "<C-Left>", "Resize split narrower" },
   { "n", "<C-Right>", "Resize split wider" },
+  { "n", "<C-S-Up>", "Resize split taller (macOS)" },
+  { "n", "<C-S-Down>", "Resize split shorter (macOS)" },
+  { "n", "<C-S-Left>", "Resize split narrower (macOS)" },
+  { "n", "<C-S-Right>", "Resize split wider (macOS)" },
 
   -- File explorer.
   { "n", "<C-e>", "Toggle explorer" },
   { "n", "<C-S-e>", "Reveal file in explorer" },
+  { "n", "<D-b>", "Toggle explorer (macOS)" },
 
   -- Telescope.
   { "n", "<C-p>", "Find files" },
   { "n", "<leader>/", "Live grep" },
   { "n", "<C-b>", "Switch buffer" },
   { "n", "<C-t>", "Recent files" },
+  { "n", "<D-p>", "Find files (macOS)" },
 
   -- Save / quit.
   { "n", "<C-s>", "Save file" },
   { "i", "<C-s>", "Save file" },
+  { "n", "<D-s>", "Save file (macOS)" },
+  { "i", "<D-s>", "Save file (macOS)" },
   { "n", "<C-q>", "Quit all" },
 
   -- Format.
@@ -159,6 +168,8 @@ local MAPPINGS = {
   { "x", "<C-_>", "Toggle comment" },
   { "n", "<C-/>", "Toggle comment" },
   { "x", "<C-/>", "Toggle comment" },
+  { "n", "<D-/>", "Toggle comment (macOS)" },
+  { "x", "<D-/>", "Toggle comment (macOS)" },
 
   -- Search highlight.
   { "n", "<Esc>", "Clear search highlight" },
@@ -251,18 +262,95 @@ describe("config.keymaps", function()
   end)
 
   describe("platform rule", function()
-    it("uses no <D-...> (Cmd) mappings", function()
-      -- Standing project rule: this branch keeps Windows/Linux Ctrl-based
-      -- shortcuts and Mac Cmd bindings live on a separate branch. A <D- lhs
-      -- landing here is how the two branches quietly converge, and it is also
-      -- dead weight for every non-Mac GUI, where <D- is never produced.
-      local offenders = {}
-      for i, line in ipairs(vim.fn.readfile(keymaps_path)) do
-        if line:find("<D%-") then
-          table.insert(offenders, ("line %d: %s"):format(i, line))
+    -- This is the mac-config branch, so the rule here is the *inverse* of main's.
+    -- On main a <D- lhs is a bug (Cmd is a keycode Windows and Linux never send,
+    -- and a Cmd binding landing there is how the two branches quietly converge).
+    -- Here Cmd bindings are the entire point of the branch — but they earn their
+    -- keep only as *aliases*: each one mirrors a binding that already exists, and
+    -- the original stays put.
+    --
+    -- That property is what makes this branch cheap to maintain. Because every
+    -- Mac key is additive, a merge from main can only ever add lines here, never
+    -- conflict over a rebound key — and the config still works from an external
+    -- PC keyboard on the same machine, which is the case a straight replacement
+    -- would have silently broken.
+    --
+    -- { Mac lhs, the portable lhs it mirrors, modes }
+    local MAC_ALIASES = {
+      -- macOS takes Ctrl+arrow for Mission Control and Ghostty takes Cmd+arrow
+      -- for readline/prompt-jump, so the resize keys need a third combination
+      -- rather than a Cmd one.
+      { "<C-S-Up>",    "<C-Up>",    { "n" } },
+      { "<C-S-Down>",  "<C-Down>",  { "n" } },
+      { "<C-S-Left>",  "<C-Left>",  { "n" } },
+      { "<C-S-Right>", "<C-Right>", { "n" } },
+      { "<D-b>", "<C-e>", { "n" } },
+      { "<D-p>", "<C-p>", { "n" } },
+      { "<D-s>", "<C-s>", { "n", "i" } },
+      { "<D-/>", "<C-/>", { "n", "x" } },
+    }
+
+    --- What a mapping actually does: the rhs for a string mapping, the function
+    --- itself for a Lua one. Comparing this is what catches an alias drifting
+    --- from its twin — the failure mode where Cmd+S still saves but the two keys
+    --- have quietly grown different behaviour.
+    local function action(mode, lhs)
+      local d = H.keymap(mode, lhs)
+      if not d then return nil end
+      return d.callback or d.rhs
+    end
+
+    it("never replaces the portable binding it mirrors", function()
+      local broken = {}
+      for _, alias in ipairs(MAC_ALIASES) do
+        local mac, portable, modes = alias[1], alias[2], alias[3]
+        for _, mode in ipairs(modes) do
+          if not H.has_keymap(mode, portable) then
+            table.insert(broken, ("%s was removed when %s was added"):format(
+              key(mode, portable), mac))
+          elseif not H.has_keymap(mode, mac) then
+            table.insert(broken, key(mode, mac) .. " is missing")
+          elseif action(mode, mac) ~= action(mode, portable) then
+            table.insert(broken, ("%s and %s no longer do the same thing"):format(
+              key(mode, mac), key(mode, portable)))
+          end
         end
       end
-      assert.same({}, offenders)
+      assert.same({}, broken)
+    end)
+
+    it("labels every Mac alias '(macOS)'", function()
+      -- which-key is where these are discovered, and a Mac alias sitting in the
+      -- list unlabelled next to its twin reads as a duplicate binding. The suffix
+      -- is also the marker that says "this line is the branch's, not main's",
+      -- which is what makes the diff against main reviewable at a glance.
+      local unlabelled = {}
+      for _, alias in ipairs(MAC_ALIASES) do
+        for _, mode in ipairs(alias[3]) do
+          local d = H.keymap(mode, alias[1])
+          if not (d and (d.desc or ""):find("(macOS)", 1, true)) then
+            table.insert(unlabelled, key(mode, alias[1]))
+          end
+        end
+      end
+      assert.same({}, unlabelled)
+    end)
+
+    it("accounts for every Cmd mapping in the file", function()
+      -- MAC_ALIASES above is only a list until something forces it to be the
+      -- whole list. A new <D- mapping added without a portable twin to mirror
+      -- fails here, which is the case the pairing test cannot see by itself.
+      local declared = {}
+      for _, alias in ipairs(MAC_ALIASES) do declared[alias[1]] = true end
+
+      local undeclared = {}
+      for _, m in ipairs(parsed_mappings()) do
+        if m.lhs:find("<[dD]%-") and not declared[m.lhs] then
+          table.insert(undeclared, key(m.mode, m.lhs))
+        end
+      end
+      table.sort(undeclared)
+      assert.same({}, undeclared)
     end)
   end)
 
