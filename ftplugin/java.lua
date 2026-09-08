@@ -304,14 +304,22 @@ local config = {
       require("config.runner").main_class("run")
     end, "Run without debugging")
 
-    -- Format on save
-    vim.api.nvim_create_autocmd("BufWritePre", {
-      group = group,
-      buffer = bufnr,
-      callback = function()
-        vim.lsp.buf.format({ async = false, id = client.id })
-      end,
-    })
+    -- No format-on-save autocmd here. conform.nvim already formats every
+    -- written buffer (plugins/editor.lua's format_after_save), and java has no
+    -- entry in formatters_by_ft, so its `lsp_format = "fallback"` sends
+    -- textDocument/formatting to this very client — the identical request this
+    -- autocmd used to make. Having both meant a measured THREE formatting round
+    -- trips per :write of one Java file, the slowest LSP request jdtls serves.
+    --
+    -- conform's copy is also the safer of the two. vim.lsp.buf.format's
+    -- synchronous path applies whatever edits come back with no staleness check
+    -- at all, while conform compares the buffer's changedtick before applying
+    -- (conform/lsp_format.lua) and drops a result that a later edit has already
+    -- invalidated — the difference between reformatting and silently reverting
+    -- a keystroke that landed mid-format. conform then re-writes the buffer
+    -- itself (vim.cmd.update), so saving still leaves formatted content on disk.
+    --
+    -- <M-l> (keymaps.lua) is the manual path; both go through conform now.
 
     -- Code lenses (implementations/references counts, java-test's Run/Debug Test
     -- lenses). Bypasses vim.lsp.codelens's built-in renderer, which draws every

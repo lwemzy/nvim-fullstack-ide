@@ -66,8 +66,14 @@ map("n", "<C-q>", ":qa<CR>", { silent = true, desc = "Quit all" })
 -- ── Format ─────────────────────────────────────────────────────────────────
 -- Format-on-save handles this automatically (configured in editor.lua).
 -- C-\ is reserved for toggleterm. Manual format via Alt+L (like IntelliJ Ctrl+Alt+L).
+-- lsp_format = "fallback", not the old lsp_fallback = true: conform still
+-- translates the old key (conform/init.lua's "For backwards compatibility"
+-- block) but it is deprecated and undocumented now, so a future release
+-- dropping it would silently turn every Java/XML format into a no-op — those
+-- filetypes have no entry in formatters_by_ft and are formatted by their
+-- language server through exactly this option.
 map("n", "<M-l>", function()
-  require("conform").format({ async = true, lsp_fallback = true })
+  require("conform").format({ async = true, lsp_format = "fallback" })
 end, { desc = "Format file" })
 
 -- ── LSP actions ───────────────────────────────────────────────────────────

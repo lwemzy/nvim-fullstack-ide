@@ -461,15 +461,15 @@ describe("ftplugin/java.lua", function()
     end)
 
     it("replaces this buffer's autocmds on re-attach", function()
-      local before = H.count_autocmds("BufWritePre", "java_ftplugin", bufnr)
+      local before = H.count_autocmds("BufWritePost", "java_ftplugin", bufnr)
       assert.is_true(before > 0)
 
       -- FileType java re-fires on :e, :e!, :JdtRestart and JdtlsClean's own
-      -- `vim.cmd("edit")`. Stacking instead of replacing added another blocking
-      -- format-on-save round trip and another full codeLens sweep per event —
-      -- typing lag that got worse the longer the session ran.
+      -- `vim.cmd("edit")`. Stacking instead of replacing added another full
+      -- codeLens sweep per event (a references + implementations search over the
+      -- whole file) — typing lag that got worse the longer the session ran.
       captured.on_attach(client, bufnr)
-      assert.equals(before, H.count_autocmds("BufWritePre", "java_ftplugin", bufnr))
+      assert.equals(before, H.count_autocmds("BufWritePost", "java_ftplugin", bufnr))
     end)
 
     it("uses one shared augroup, and clears only the re-attaching buffer", function()
@@ -477,7 +477,7 @@ describe("ftplugin/java.lua", function()
       -- never reclaimed (nvim deletes a wiped buffer's autocmds, not its group),
       -- so it leaked one empty augroup per Java file opened. The risk that
       -- introduces is the opposite one: clearing the whole group on attach would
-      -- silently delete every other Java buffer's format-on-save.
+      -- silently delete every other Java buffer's code-lens autocmds.
       local other = H.scratch({ lines = { "x" } })
       local srv = fake_lsp.start({
         name = "jdtls",
@@ -490,8 +490,8 @@ describe("ftplugin/java.lua", function()
 
       -- Re-attaching `other` must leave `bufnr` alone.
       captured.on_attach(srv.client, other)
-      assert.is_true(H.count_autocmds("BufWritePre", "java_ftplugin", bufnr) > 0)
-      assert.equals(1, H.count_autocmds("BufWritePre", "java_ftplugin", other))
+      assert.is_true(H.count_autocmds("BufWritePost", "java_ftplugin", bufnr) > 0)
+      assert.equals(1, H.count_autocmds("BufWritePost", "java_ftplugin", other))
 
       -- And no per-buffer group name exists to be left behind. Note this cannot
       -- be checked with H.autocmds: nvim has no API that lists augroups, and
@@ -501,16 +501,20 @@ describe("ftplugin/java.lua", function()
       assert.is_false(pcall(vim.api.nvim_get_autocmds, { group = "java_ftplugin_" .. bufnr }))
     end)
 
-    it("registers format-on-save against the attaching client only", function()
-      local autocmds = H.autocmds({ event = "BufWritePre", group = "java_ftplugin", buffer = bufnr })
-      assert.equals(1, #autocmds)
-      -- Scoped to this client id so a second attached server (spring-boot) is
-      -- never asked to format Java.
+    it("does not format on save itself — conform owns that", function()
+      -- There used to be a BufWritePre hook here calling vim.lsp.buf.format on
+      -- this client. conform.nvim (plugins/editor.lua) already formats every
+      -- written buffer, and Java has no CLI formatter entry, so its
+      -- lsp_format = "fallback" sends textDocument/formatting to this same
+      -- client: the identical request. Both together measured THREE formatting
+      -- round trips for a single :write of one Java file, and the one removed
+      -- was the unsafe half — vim.lsp.buf.format's synchronous path applies the
+      -- server's edits with no changedtick check, where conform drops a result
+      -- a later keystroke has invalidated.
+      assert.equals(0, H.count_autocmds("BufWritePre", "java_ftplugin", bufnr))
       local formats = H.spy(vim.lsp.buf, "format")
       vim.api.nvim_exec_autocmds("BufWritePre", { buffer = bufnr })
-      assert.equals(1, formats.count)
-      assert.equals(client.id, formats[1][1].id)
-      assert.is_false(formats[1][1].async)
+      assert.equals(0, formats.count)
     end)
 
     it("only sets up the codelens renderer when the server offers lenses", function()

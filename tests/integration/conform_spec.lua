@@ -256,7 +256,7 @@ describe("conform formatter selection", function()
       assert.equals(1, H.count_autocmds("BufWritePost", "Conform"))
     end)
 
-    it("passes timeout_ms=5000 and lsp_fallback=true on every write", function()
+    it("passes timeout_ms=5000 and lsp_format=fallback on every write", function()
       local path = H.write(H.tmpdir("aftersave") .. "/note.md", { "# hi" })
       local buf = H.scratch({ name = path, lines = { "# hi" } })
       -- Spy on conform's own entry point rather than running a formatter: the
@@ -271,9 +271,15 @@ describe("conform formatter selection", function()
       -- 5000ms, not conform's 1000ms default: prettierd's first invocation pays
       -- for daemon startup and a 1s timeout aborts it mid-format.
       assert.equals(5000, opts.timeout_ms)
-      -- lsp_fallback keeps filetypes with no CLI formatter (Java via jdtls,
-      -- Lua via lua_ls) formatting on save at all.
-      assert.is_true(opts.lsp_fallback)
+      -- This is what keeps filetypes with no CLI formatter (Java via jdtls, Lua
+      -- via lua_ls) formatting on save at all — and for Java it is now the only
+      -- save-time formatter, ftplugin/java.lua's own BufWritePre copy having
+      -- been removed. Spelled lsp_format, not the deprecated lsp_fallback:
+      -- conform still translates the old key silently, so a spec asserting on
+      -- the old spelling would keep passing right up to the release that drops
+      -- it and stops formatting Java altogether.
+      assert.equals("fallback", opts.lsp_format)
+      assert.is_nil(opts.lsp_fallback)
       -- async is forced by format_after_save; async=false there is an error
       -- conform notifies about on every single save.
       assert.is_true(opts.async)

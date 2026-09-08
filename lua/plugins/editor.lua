@@ -184,10 +184,21 @@ return {
           markdown        = { "prettierd", "prettier", stop_after_first = true },
         },
         -- format_after_save runs async so it never blocks editing
-        format_after_save = function(bufnr)
+        --
+        -- lsp_format = "fallback" is what formats the filetypes with no entry
+        -- above — Java (jdtls, via the java-google-style.xml profile in
+        -- ftplugin/java.lua), XML, Lua. It is spelled the current way, not the
+        -- old `lsp_fallback = true`: conform still translates that key for
+        -- backwards compatibility but no longer documents it, and a release
+        -- dropping it would silently leave those filetypes unformatted on save
+        -- with nothing in the logs to say so. This is now the *only* save-time
+        -- formatting path for Java — ftplugin/java.lua's own BufWritePre copy
+        -- was removed, since the two together cost three formatting round trips
+        -- per write.
+        format_after_save = function()
           return {
-            timeout_ms   = 5000,
-            lsp_fallback = true,
+            timeout_ms  = 5000,
+            lsp_format  = "fallback",
           }
         end,
         formatters = {
