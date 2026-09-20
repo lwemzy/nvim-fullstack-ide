@@ -18,17 +18,29 @@ autocmd("BufReadPost", {
   end,
 })
 
--- Java: 2-space indent (Google Java Style Guide §4.2) — matches
--- java-google-style.xml's actual formatter output (ftplugin/java.lua),
--- so what you type before format-on-save already looks like the result.
+-- Java: 4-wide hard tabs — matches java-google-style.xml's formatter output
+-- (tabulation.char = tab, size 4; ftplugin/java.lua), so what you type before
+-- format-on-save already looks like the result.
 autocmd("FileType", {
   group = augroup("java_settings", { clear = true }),
   pattern = "java",
   callback = function()
-    vim.opt_local.tabstop = 2
-    vim.opt_local.shiftwidth = 2
+    vim.opt_local.tabstop = 4
+    vim.opt_local.shiftwidth = 4
+    vim.opt_local.expandtab = false
     -- Google style §4.4: line length is 100 columns
     vim.opt_local.colorcolumn = "100"
+  end,
+})
+
+-- YAML forbids tab indentation, so it stays on 2 spaces despite the global tabs.
+autocmd("FileType", {
+  group = augroup("yaml_spaces", { clear = true }),
+  pattern = { "yaml", "yml" },
+  callback = function()
+    vim.opt_local.expandtab = true
+    vim.opt_local.tabstop = 2
+    vim.opt_local.shiftwidth = 2
   end,
 })
 

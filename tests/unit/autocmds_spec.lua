@@ -215,8 +215,9 @@ describe("config.autocmds", function()
       H.stub(vim.wo, "colorcolumn", vim.wo.colorcolumn)
       vim.bo[buf].filetype = "java"
 
-      assert.equals(2, vim.bo[buf].tabstop)
-      assert.equals(2, vim.bo[buf].shiftwidth)
+      assert.equals(4, vim.bo[buf].tabstop)
+      assert.equals(4, vim.bo[buf].shiftwidth)
+      assert.is_false(vim.bo[buf].expandtab)
       -- 100, not 80: the checked-in java-google-style.xml wraps at 100, so a
       -- different column here would draw the guide in the wrong place
       -- relative to what format-on-save actually produces.

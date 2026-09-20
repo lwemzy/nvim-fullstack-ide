@@ -2,9 +2,12 @@ local opt = vim.opt
 
 opt.number = true
 opt.relativenumber = false
-opt.tabstop = 2
-opt.shiftwidth = 2
-opt.expandtab = true
+-- Hard tabs, 4 columns wide (VS Code-style: Tab inserts a tab character, and
+-- >> / << shift by one tab). softtabstop = -1 makes Backspace follow shiftwidth.
+opt.tabstop = 4
+opt.shiftwidth = 4
+opt.softtabstop = -1
+opt.expandtab = false
 opt.smartindent = true
 opt.wrap = false
 opt.swapfile = false

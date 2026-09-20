@@ -184,7 +184,7 @@ describe("conform formatter selection", function()
       return config, require("conform.runner").build_context(bufnr, config)
     end
 
-    it("adds --single-quote on top of the built-in prettier args", function()
+    it("adds --single-quote and tab indentation on top of the built-in prettier args", function()
       local dir = H.fixture("prettier-none")
       local buf = named_buffer(dir .. "/src/index.ts")
       local config, ctx = resolve(buf)
@@ -192,11 +192,11 @@ describe("conform formatter selection", function()
 
       -- --stdin-filepath must survive: prettier infers its parser from that
       -- path, and dropping it makes prettier fail on every buffer.
-      assert.same({ "--stdin-filepath", "$FILENAME", "--single-quote" }, args)
-      -- The wrapper is documented as adding exactly one difference from
-      -- prettier's stock defaults (both Google style guides mandate single
-      -- quotes; everything else prettier already does). Anything more here
-      -- would be this IDE inventing a style nobody asked for.
+      assert.same({ "--stdin-filepath", "$FILENAME", "--single-quote", "--use-tabs", "--tab-width=4" }, args)
+      -- Differences from prettier's stock defaults: single quotes (both Google
+      -- style guides) and 4-wide hard tabs, matching the editor's own indent
+      -- settings so format-on-save doesn't turn tabs back into spaces. Only
+      -- reached when the project has no prettier config of its own.
       local base = require("conform.formatters.prettier")
       assert.same({ "--stdin-filepath", "$FILENAME" }, base.args(base, ctx))
     end)

@@ -220,6 +220,8 @@ return {
               args = function(self, ctx)
                 local args = base.args(self, ctx)
                 table.insert(args, "--single-quote")
+                table.insert(args, "--use-tabs")
+                table.insert(args, "--tab-width=4")
                 return args
               end,
               env = {

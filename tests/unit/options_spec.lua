@@ -163,14 +163,14 @@ describe("config.options", function()
   end)
 
   describe("indentation", function()
-    it("expands tabs to two spaces consistently", function()
+    it("uses hard tabs four columns wide, consistently", function()
       -- tabstop and shiftwidth have to agree: if they differ, `>>` and a
       -- literal Tab produce different widths in the same file and every
       -- formatter run reflows lines the editor just indented.
-      assert.equals(2, vim.o.tabstop)
-      assert.equals(2, vim.o.shiftwidth)
+      assert.equals(4, vim.o.tabstop)
+      assert.equals(4, vim.o.shiftwidth)
       assert.equals(vim.o.tabstop, vim.o.shiftwidth)
-      assert.is_true(vim.o.expandtab)
+      assert.is_false(vim.o.expandtab)
     end)
 
     it("applies the same indentation to buffers opened later", function()
@@ -179,9 +179,9 @@ describe("config.options", function()
       -- after startup inherit it — this is the assertion that would catch a
       -- change to `vim.bo`, which would only ever configure buffer 1.
       local buf = H.scratch()
-      assert.equals(2, vim.bo[buf].tabstop)
-      assert.equals(2, vim.bo[buf].shiftwidth)
-      assert.is_true(vim.bo[buf].expandtab)
+      assert.equals(4, vim.bo[buf].tabstop)
+      assert.equals(4, vim.bo[buf].shiftwidth)
+      assert.is_false(vim.bo[buf].expandtab)
     end)
 
     it("enables smartindent", function()
