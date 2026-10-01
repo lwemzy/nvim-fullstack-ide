@@ -214,9 +214,14 @@ describe("conform formatter selection", function()
       -- Google style would never be applied.
       assert.is_truthy(command:match("prettier$"), "command is " .. tostring(command))
       assert.is_nil(command:match("prettierd"))
-      -- mason installs prettier outside the system PATH, so the formatter has
-      -- to carry mason's bin dir or it is "available = false" on save.
-      assert.is_truthy(config.env and config.env.PATH:find("mason", 1, true))
+      -- mason installs prettier outside the system PATH. The fix is on the
+      -- *process* PATH (lua/config/options.lua), not in this formatter's `env`:
+      -- conform calls vim.fn.executable() against the process PATH and never
+      -- reads `env`, so an env-only PATH left it "available = false" and the save
+      -- silently unformatted. Asserted here as well as in options_spec because
+      -- this is the formatter that was broken by getting it the other way round.
+      assert.is_truthy((":" .. vim.env.PATH .. ":"):find("/mason/bin:", 1, true),
+        "mason bin not on the process PATH: " .. vim.env.PATH)
     end)
 
     it("is actually available on this machine", function()

@@ -265,13 +265,15 @@ return {
             lsp_format  = "fallback",
           }
         end,
+        -- No per-formatter `env = { PATH = mason/bin .. vim.env.PATH }` here any
+        -- more: lua/config/options.lua prepends that directory to the process
+        -- PATH at startup, which both of these inherit. The per-formatter copies
+        -- were not just redundant, they were the wrong lever — conform decides a
+        -- formatter is available with vim.fn.executable() against the *process*
+        -- PATH and never looks at `env` (conform/init.lua: get_formatter_info),
+        -- so they made the spawned process resolve while leaving conform
+        -- convinced prettier did not exist, and formatting was skipped silently.
         formatters = {
-          prettierd = {
-            env = {
-              -- Ensure mason's prettierd is found even if not in system PATH
-              PATH = vim.fn.stdpath("data") .. "/mason/bin:" .. vim.env.PATH,
-            },
-          },
           -- Plain prettier (not prettierd — the daemon doesn't accept ad-hoc
           -- CLI overrides) with Google's one confirmed formatting difference
           -- from Prettier's stock defaults applied explicitly. prepend_args
@@ -288,9 +290,6 @@ return {
                 table.insert(args, "--tab-width=4")
                 return args
               end,
-              env = {
-                PATH = vim.fn.stdpath("data") .. "/mason/bin:" .. vim.env.PATH,
-              },
             })
           end)(),
         },

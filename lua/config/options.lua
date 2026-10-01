@@ -11,10 +11,13 @@ local opt = vim.opt
 -- unavailable formatter is skipped silently, which is JS/TS/JSON/CSS/YAML/MD
 -- quietly not formatting on save.
 --
--- Prepended, not appended, to match mason's own default (PATH = "prepend") so
--- resolution order is exactly what it was while mason.setup() did this. Guarded
--- against double-prepending because mason.setup() still runs this when the
--- installer does load. Separator is ":" like the rest of the config
+-- Prepended, not appended, to match the mason default this replaces (PATH =
+-- "prepend") so resolution order is exactly what it was while mason.setup() did
+-- it. mason.setup() is now passed PATH = "skip" (lua/plugins/lsp.lua), because
+-- mason's own prepend is unconditional and would add the same directory again
+-- on every load. The guard here is belt-and-braces for that setting being
+-- changed back, and for this file being sourced twice (`:luafile`, a spec
+-- re-requiring it). Separator is ":" like the rest of the config
 -- (lua/plugins/editor.lua); this config targets Linux/macOS.
 local mason_bin = vim.fn.stdpath("data") .. "/mason/bin"
 if not (":" .. (vim.env.PATH or "") .. ":"):find(":" .. mason_bin .. ":", 1, true) then

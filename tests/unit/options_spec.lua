@@ -272,12 +272,14 @@ describe("config.options", function()
 
     it("prepends it, and only once however many times it loads", function()
       local mason_bin = vim.fn.stdpath("data") .. "/mason/bin"
-      -- Prepended: mason's own default is PATH = "prepend", and resolution order
-      -- has to stay what it was while mason.setup() did this.
+      -- Prepended: the mason default this replaces is PATH = "prepend", and
+      -- resolution order has to stay what it was while mason.setup() did it.
       assert.equals(mason_bin, vim.split(vim.env.PATH, ":", { plain = true })[1])
-      -- Guarded against duplicates, because mason.setup() prepends it again the
-      -- moment the installer does load — and an unbounded PATH is passed to
-      -- every job this editor spawns.
+      -- Guarded against duplicates. This is the half of the fix that lives here;
+      -- the other half is PATH = "skip" in mason.setup() (lua/plugins/lsp.lua),
+      -- because mason's prepend is unconditional and no guard in this file can
+      -- stop it. Both are needed: without the guard a :source duplicates the
+      -- entry, without "skip" every mason load does.
       load_options()
       load_options()
       local n = 0
@@ -285,6 +287,16 @@ describe("config.options", function()
         if entry == mason_bin then n = n + 1 end
       end
       assert.equals(1, n)
+    end)
+
+    it("leaves mason's own PATH handling switched off", function()
+      -- The other half of the above, asserted from here because this is where the
+      -- reason is written down. Read from the source rather than from the loaded
+      -- plugin: mason.setup() runs inside a lazy `config` function that unit mode
+      -- never reaches, and the value is gone by the time it has.
+      local src = H.read_text(vim.fn.stdpath("config") .. "/lua/plugins/lsp.lua")
+      assert.is_truthy(src:find('PATH = "skip"', 1, true),
+        'mason.setup() no longer passes PATH = "skip"; it will re-prepend its bin dir on every load')
     end)
   end)
 

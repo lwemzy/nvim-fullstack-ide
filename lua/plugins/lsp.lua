@@ -21,6 +21,15 @@ return {
     cmd = { "Mason", "MasonInstall", "MasonUninstall", "MasonUninstallAll", "MasonLog", "MasonUpdate" },
     config = function()
       require("mason").setup({
+        -- lua/config/options.lua already prepends mason's bin dir, at startup
+        -- rather than whenever this happens to load, because conform tests a
+        -- formatter's availability against the *process* PATH. mason's own
+        -- prepend is unguarded (mason-core/installer/InstallLocation.lua:
+        -- `vim.env.PATH = self:bin() .. sep .. vim.env.PATH`), so leaving it at
+        -- its "prepend" default puts the same directory in PATH a second time
+        -- every time mason loads — harmless to resolution, but it means PATH
+        -- grows per load and no longer matches what the config set.
+        PATH = "skip",
         ui = {
           border = "rounded",
           icons = { package_installed = "✓", package_pending = "➜", package_uninstalled = "✗" },
