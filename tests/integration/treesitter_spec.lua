@@ -17,9 +17,14 @@
 local H = require("helpers")
 local highlighter = require("vim.treesitter.highlighter")
 
--- Thresholds copied from lua/config/autocmds.lua. Duplicated deliberately: the
--- values are local to that module, and a spec that read them from the source
--- would pass no matter what they were changed to.
+-- Thresholds copied from lua/config/bigfile.lua (where they moved from
+-- lua/config/autocmds.lua when the LSP tier was added). Duplicated deliberately
+-- even though they are public now: a spec that read bigfile.MAX_LINES would pass
+-- for any value it was ever changed to, including 10 — which would take
+-- treesitter highlighting away from ordinary files and still be green here.
+--
+-- The pairing is asserted once below, so changing a threshold fails with "the
+-- threshold moved" rather than with an unexplained missing highlighter.
 local TS_MAX_LINES = 10000
 local TS_MAX_BYTES = 512 * 1024
 
@@ -298,6 +303,16 @@ describe("treesitter highlighting on real buffers", function()
     -- the syntax engine; attaching a parser to them pays the parse cost for
     -- content that is thrown away a keystroke later.
     assert.is_false(highlighted(buf))
+  end)
+
+  it("still guards at the thresholds this spec was written against", function()
+    -- The tripwire for the duplication at the top of this file. Without it,
+    -- lowering MAX_LINES to 10 would leave every case below green (a 10001-line
+    -- file is still over 10) while taking highlighting away from ordinary source
+    -- files — the regression the guard exists to avoid causing.
+    local bigfile = require("config.bigfile")
+    assert.equals(TS_MAX_LINES, bigfile.MAX_LINES)
+    assert.equals(TS_MAX_BYTES, bigfile.MAX_BYTES)
   end)
 
   it("opts out of a buffer over the line limit", function()

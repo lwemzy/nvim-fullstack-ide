@@ -14,8 +14,8 @@
 
 local H = require("helpers")
 -- A real client, not a stub, for the bigfile_lsp group: the thing under test is
--- that LspAttach fires and that buf_detach_client actually removes the buffer
--- from the client, neither of which a fake table can show.
+-- that LspAttach fires and that the client is still attached afterwards, and a
+-- fake table can show neither.
 local fake_lsp = require("helpers.fake_lsp")
 
 local function load_autocmds()
@@ -34,6 +34,7 @@ local EXPECTED = {
   java_settings          = { FileType = 1 },
   close_with_q           = { FileType = 5 },
   bigfile_detect         = { BufReadPre = 1 },
+  bigfile_limit          = { BufReadPost = 1 },
   bigfile_lsp            = { LspAttach = 1 },
   treesitter_highlight   = { FileType = 1 },
   auto_save_stamp        = { BufReadPost = 1, BufWritePost = 1 },
@@ -319,15 +320,8 @@ describe("config.autocmds", function()
       bigfile = require("config.bigfile")
     end)
 
-    --- A normal (buftype "") named buffer of `n` lines.
-    local function lines_buffer(n, tag)
-      local lines = {}
-      for i = 1, n do lines[i] = "line " .. i end
-      return H.scratch({ name = H.tmpdir(tag) .. "/" .. tag .. ".txt", lines = lines, scratch = false })
-    end
-
     it("marks an over-limit buffer and turns off the per-edit decoration", function()
-      local buf = lines_buffer(bigfile.MAX_LINES + 1, "big")
+      local buf = H.lines_buffer(bigfile.MAX_LINES + 1, "big")
       vim.bo[buf].filetype = "text"
 
       assert.is_true(vim.b[buf].bigfile)
@@ -341,7 +335,7 @@ describe("config.autocmds", function()
     end)
 
     it("leaves an ordinary buffer's options exactly alone", function()
-      local buf = lines_buffer(5, "small")
+      local buf = H.lines_buffer(5, "small")
       local before = vim.bo[buf].synmaxcol
       vim.bo[buf].filetype = "text"
 
@@ -362,6 +356,52 @@ describe("config.autocmds", function()
       assert.is_true(vim.b[buf].bigfile)
       assert.equals(200, vim.bo[buf].synmaxcol)
     end)
+
+    it("limits a big file that has no filetype at all", function()
+      -- FileType never fires for an extension nvim has no mapping for (.dump,
+      -- .bin, a no-extension blob), so the flag BufReadPre sets would be the end of
+      -- it — and that is the worst case rather than an edge case: a single 3MB line
+      -- is exactly the shape synmaxcol exists to bound. Measured before the
+      -- BufReadPost handler existed: b:bigfile true, synmaxcol still 3000.
+      local path = H.write(H.tmpdir("blob") .. "/dump.bin", { string.rep("y", 600 * 1024) })
+      local buf = H.edit(path)
+
+      assert.equals("", vim.bo[buf].filetype)
+      assert.is_true(vim.b[buf].bigfile)
+      assert.equals(200, vim.bo[buf].synmaxcol)
+    end)
+
+    it("clears the flag when the file is re-read smaller", function()
+      -- b:bigfile used to be write-once-true. This config's own auto_reload group
+      -- runs `checktime`, which re-fires BufReadPre on the same bufnr, so a
+      -- rebuilt bundle or a truncated log stayed degraded for the rest of the
+      -- buffer's life with nothing the user could do about it.
+      local path = H.write(H.tmpdir("shrink") .. "/b.js", { string.rep("x", 600 * 1024) })
+      local buf = H.edit(path)
+      assert.is_true(vim.b[buf].bigfile)
+
+      H.write(path, { "small again" })
+      vim.cmd("silent! edit!")
+
+      assert.equals(buf, vim.api.nvim_get_current_buf())
+      assert.is_nil(vim.b[buf].bigfile)
+    end)
+
+    it("judges a re-read on the file, not on what the buffer still holds", function()
+      -- The inverse, and it needs no disk change: at BufReadPre the buffer still
+      -- holds the *outgoing* contents, so measuring its line count means 20k pasted
+      -- lines plus :e! to discard them leaves the resulting 3-line buffer limited.
+      local path = H.write(H.tmpdir("paste") .. "/s.js", { "one", "two", "three" })
+      local buf = H.edit(path)
+      local lines = {}
+      for i = 1, 20001 do lines[i] = "x" end
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+
+      vim.cmd("silent! edit!")
+
+      assert.equals(3, vim.api.nvim_buf_line_count(buf))
+      assert.is_nil(vim.b[buf].bigfile)
+    end)
   end)
 
   describe("bigfile_lsp", function()
@@ -375,9 +415,7 @@ describe("config.autocmds", function()
 
     --- A real fake server attached to a normal buffer of `n` lines.
     local function attach(n, tag)
-      local lines = {}
-      for i = 1, n do lines[i] = "line " .. i end
-      local buf = H.scratch({ name = H.tmpdir(tag) .. "/" .. tag .. ".txt", lines = lines, scratch = false })
+      local buf = H.lines_buffer(n, tag)
       -- A filetype first, so the order matches reality: detection runs, then a
       -- server attaches. "text" rather than "java" deliberately — setting java
       -- would run this repo's own ftplugin and start a real jdtls.
@@ -385,12 +423,6 @@ describe("config.autocmds", function()
       local srv, notes
       notes = H.capture_notifications(function()
         srv = fake_lsp.start({ name = "jdtls", bufnr = buf, root_dir = H.tmpdir("root-" .. tag) })
-        -- The wait is inside the capture because the detach is scheduled rather
-        -- than immediate (see the LspAttach handler's comment: on_attach
-        -- re-registers the buffer after the event, so a synchronous detach is
-        -- silently undone). Nothing has been decided when start() returns, and
-        -- the notification arrives with the detach.
-        vim.wait(200, function() return #vim.lsp.get_clients({ bufnr = buf }) == 0 end)
       end)
       H.track_client(srv.id)
       return buf, srv, notes
@@ -398,28 +430,62 @@ describe("config.autocmds", function()
 
     it("keeps the server on a merely large file", function()
       -- The regression this exists to prevent: a 10k-line Java class is ordinary
-      -- in a real project, it is over the *decoration* limit, and detaching jdtls
-      -- there would take completion and diagnostics with it.
+      -- in a real project, it is over the *decoration* limit, and losing LSP
+      -- features there would read as the language server being broken.
       local buf, srv, notes = attach(bigfile.MAX_LINES + 1, "large")
 
       assert.is_true(vim.b[buf].bigfile)
-      assert.is_truthy(vim.lsp.get_client_by_id(srv.id))
       assert.same({ buf }, vim.tbl_keys(vim.lsp.get_client_by_id(srv.id).attached_buffers))
       assert.same({}, notes)
     end)
 
-    it("detaches the server from a file nobody edits by hand, and says so", function()
+    it("hands the limiter the event's buffer and the client that attached", function()
+      -- The wiring, separately from what limit_lsp then does (pinned in
+      -- bigfile_spec): it has to resolve args.data.client_id into the real client
+      -- object, because limit_lsp reads server_capabilities off it to decide
+      -- whether semantic tokens are worth stopping. A spy is the only way to see
+      -- the arguments — every effect limit_lsp has is "a feature is off", which is
+      -- also true of a buffer nothing ever enabled it for.
+      local calls = H.spy(bigfile, "limit_lsp")
+      local buf, srv = attach(bigfile.LSP_MAX_LINES + 1, "args")
+
+      assert.equals(1, calls.count)
+      assert.equals(buf, calls[1][1])
+      assert.equals(srv.id, calls[1][2].id)
+    end)
+
+    it("keeps the client attached even past the LSP limit, and says what is off", function()
+      -- The design this pins, and the reason it changed: an earlier version
+      -- detached the client from the buffer. lua/config/lsp_reap.lua derives
+      -- idleness from client.attached_buffers, so detaching the only Java buffer
+      -- emptied it and the reaper stopped the JVM five minutes later — with a
+      -- "no open buffers" toast about a file that was still on screen, and a
+      -- ~30s re-import to get it back. The buffer's LSP keymaps and navic were
+      -- bound to a client that vanished a tick later too.
       local buf, srv, notes = attach(bigfile.LSP_MAX_LINES + 1, "huge")
 
-      -- Detached from this buffer, not stopped: another buffer of the same
-      -- project may still need the client.
-      assert.is_nil(vim.lsp.get_client_by_id(srv.id).attached_buffers[buf])
-      assert.equals(0, #vim.lsp.get_clients({ bufnr = buf }))
-      -- Notified, unlike every other limit here, because the symptom is
-      -- indistinguishable from the LSP simply being broken in that file.
+      assert.is_truthy(vim.lsp.get_client_by_id(srv.id).attached_buffers[buf])
+      assert.equals(1, #vim.lsp.get_clients({ bufnr = buf }))
+      -- Notified, unlike every other limit here, because three features silently
+      -- missing is indistinguishable from the LSP being broken in that file. The
+      -- message has to say what still works, or the toast causes the same doubt.
       assert.equals(1, #notes)
       assert.equals(vim.log.levels.WARN, notes[1].level)
-      assert.is_truthy(notes[1].msg:find("jdtls", 1, true))
+      assert.is_truthy(notes[1].msg:find("inlay hints", 1, true))
+      assert.is_truthy(notes[1].msg:find("Completion and diagnostics still work", 1, true))
+    end)
+
+    it("warns once per buffer, not once per attach", function()
+      -- Two servers on one buffer is the normal Java case (jdtls plus
+      -- spring-boot-tools), and a second identical toast for the same file is
+      -- noise that trains you to dismiss the first.
+      local buf = attach(bigfile.LSP_MAX_LINES + 1, "twice")
+      local again = H.capture_notifications(function()
+        H.track_client(fake_lsp.start({
+          name = "spring-boot", bufnr = buf, root_dir = H.tmpdir("root-twice-2"),
+        }).id)
+      end)
+      assert.same({}, again)
     end)
   end)
 

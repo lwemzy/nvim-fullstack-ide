@@ -57,73 +57,104 @@ autocmd("FileType", {
 local bigfile = require("config.bigfile")
 
 -- Flag oversized buffers. Two events, because neither alone can see both halves
--- of the test: at BufReadPre the buffer is still empty, so only the on-disk size
--- is knowable — and that is the half that has to be known early, since LSP
--- attach and the plugins' own BufReadPre/BufReadPost hooks all run before
--- FileType. The line count only exists once the file is in the buffer, which is
--- the FileType handler's turn below.
+-- of the test: at BufReadPre the incoming file is not in the buffer yet, so only
+-- its on-disk size is knowable — and that is the half that has to be known early,
+-- since LSP attach and the plugins' own BufReadPre/BufReadPost hooks all run
+-- before FileType. The line count only exists once the file is in the buffer,
+-- which is the FileType handler's turn below.
 --
 -- Flagged once and remembered in b:bigfile rather than recomputed per consumer,
 -- so one file cannot be big for treesitter and small for the LSP.
+--
+-- Assigned, never merely set: on a reload (this config's own auto_reload group
+-- runs `checktime`, and :e! does the same) BufReadPre fires again on the same
+-- bufnr, and a file that has since shrunk — a rebuilt bundle, a truncated log —
+-- would otherwise stay degraded for the rest of its life. Judged on the on-disk
+-- size alone here, because the buffer at this point still holds the *outgoing*
+-- contents: a 3-line file reloaded after 20k lines were pasted into it would
+-- otherwise be read as big.
 autocmd("BufReadPre", {
   group = augroup("bigfile_detect", { clear = true }),
   callback = function(args)
     if vim.bo[args.buf].buftype ~= "" then return end
-    if bigfile.is_big(args.buf) then vim.b[args.buf].bigfile = true end
+    local path = vim.api.nvim_buf_get_name(args.buf)
+    vim.b[args.buf].bigfile = bigfile.file_over(path, bigfile.MAX_BYTES) or nil
+    vim.b[args.buf].bigfile_limited = nil
   end,
 })
 
--- Enable treesitter highlighting for every buffer that has a parser.
+-- Apply the limits, and start treesitter on everything else.
+--
 -- Load-bearing: nvim-treesitter `main` no longer starts highlighting itself.
 -- Guarded on buftype as well as size: a terminal or prompt buffer has a filetype
--- but nothing to parse. Big files keep regex syntax instead — see
--- lua/config/bigfile.lua for why that one is left on when everything else goes.
+-- but nothing to parse.
+local function guard(buf)
+  if vim.bo[buf].buftype ~= "" then return end
+  if not vim.b[buf].bigfile and bigfile.is_big(buf) then
+    vim.b[buf].bigfile = true
+  end
+  if vim.b[buf].bigfile then
+    -- Idempotent on its own, but the flag keeps a BufReadPost+FileType pair from
+    -- scheduling the plugin teardown twice for one open.
+    if not vim.b[buf].bigfile_limited then
+      vim.b[buf].bigfile_limited = true
+      bigfile.limit(buf)
+    end
+    return
+  end
+  pcall(vim.treesitter.start, buf)
+end
+
 autocmd("FileType", {
   group = augroup("treesitter_highlight", { clear = true }),
+  callback = function(args) guard(args.buf) end,
+})
+
+-- BufReadPost as well, for the files FileType never fires for: an extension
+-- Neovim has no mapping for (.dump, .bin, a no-extension blob) gets no filetype
+-- and therefore no FileType event, so the flag BufReadPre set would be the end of
+-- it. That is the worst case rather than an edge case — a 3MB single-line dump is
+-- exactly the shape synmaxcol exists to bound, and it was measured coming out of
+-- the guard with synmaxcol still at 3000.
+autocmd("BufReadPost", {
+  group = augroup("bigfile_limit", { clear = true }),
   callback = function(args)
-    if vim.bo[args.buf].buftype ~= "" then return end
-    if not vim.b[args.buf].bigfile and bigfile.is_big(args.buf) then
-      vim.b[args.buf].bigfile = true
-    end
-    if vim.b[args.buf].bigfile then
-      bigfile.limit(args.buf)
-      return
-    end
-    pcall(vim.treesitter.start, args.buf)
+    if vim.bo[args.buf].filetype == "" then guard(args.buf) end
   end,
 })
 
--- Keep language servers off files nobody edits by hand. Detach-on-attach rather
--- than declining to start the client: the servers here are started from several
--- places (vim.lsp.enable via mason-lspconfig, ftplugin/java.lua's own
--- start_or_attach) and LspAttach is the one point every one of them passes
+-- Keep the whole-document LSP features off files nobody edits by hand, while
+-- leaving the client attached — see bigfile.limit_lsp for why detaching the
+-- client, which is what this did first, breaks three other things.
+--
+-- On LspAttach rather than at start-up time because the servers here are started
+-- from several places (vim.lsp.enable from lua/plugins/lsp.lua, ftplugin/java.lua's
+-- own start_or_attach) and LspAttach is the one point every one of them passes
 -- through, so this cannot be bypassed by adding a server later.
 --
--- Notified, unlike every other limit in this file, because this is the only one
--- whose symptom — no completion, no diagnostics, no go-to-definition — is
--- indistinguishable from the LSP being broken. See bigfile.LSP_MAX_LINES for why
--- the threshold is far above the decoration one.
+-- Notified, unlike every other limit in this file, because it is the only one that
+-- takes away something the user asks for by name. Once per buffer: `nvim.lsp.enable`
+-- registers a FileType-pattern-* autocmd, so every reload re-attaches every enabled
+-- server, and with nvim-notify live an unguarded notify stacks toasts for as long as
+-- the file keeps changing on disk.
 autocmd("LspAttach", {
   group = augroup("bigfile_lsp", { clear = true }),
   callback = function(args)
     if vim.bo[args.buf].buftype ~= "" then return end
-    if not bigfile.is_too_big_for_lsp(args.buf) then return end
-    -- Scheduled, not immediate, and this is load-bearing: Client:on_attach
-    -- fires LspAttach and *then* sets `attached_buffers[bufnr]` as its very last
-    -- statement (runtime/lua/vim/lsp/client.lua). Detaching synchronously from
-    -- inside the event is therefore undone a moment later by that assignment —
-    -- the server keeps the document, with nothing to show the detach failed.
-    vim.schedule(function()
-      if not vim.api.nvim_buf_is_valid(args.buf) then return end
-      local client = vim.lsp.get_client_by_id(args.data.client_id)
-      if not client or not client.attached_buffers[args.buf] then return end
-      vim.lsp.buf_detach_client(args.buf, args.data.client_id)
+    if not bigfile.is_heavy_for_lsp(args.buf) then return end
+    local client = vim.lsp.get_client_by_id(args.data.client_id)
+    if not client then return end
+
+    bigfile.limit_lsp(args.buf, client)
+
+    if not vim.b[args.buf].bigfile_lsp_warned then
+      vim.b[args.buf].bigfile_lsp_warned = true
       vim.notify(
-        ("%s detached: file is over %d lines / %dMB, so LSP features are off here.")
-          :format(client.name, bigfile.LSP_MAX_LINES, bigfile.LSP_MAX_BYTES / 1024 / 1024),
+        ("File is over %d lines / %dMB: inlay hints, semantic tokens and reference highlighting are off here. Completion and diagnostics still work.")
+          :format(bigfile.LSP_MAX_LINES, bigfile.LSP_MAX_BYTES / 1024 / 1024),
         vim.log.levels.WARN
       )
-    end)
+    end
   end,
 })
 

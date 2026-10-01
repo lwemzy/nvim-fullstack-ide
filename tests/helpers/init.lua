@@ -190,6 +190,18 @@ function H.scratch(opts)
   return buf
 end
 
+--- A normal (buftype "") named buffer of `n` lines, for the size guards.
+---
+--- Named as well as normal because that is what the guards look at: an unnamed
+--- buffer is judged on its line count alone (getfsize has nothing to stat), so a
+--- plain H.scratch would silently exercise only half of config.bigfile. `tag`
+--- separates the tmpdirs so two buffers in one spec cannot share a path.
+function H.lines_buffer(n, tag)
+  local lines = {}
+  for i = 1, n do lines[i] = "line " .. i end
+  return H.scratch({ name = H.tmpdir(tag) .. "/" .. tag .. ".txt", lines = lines, scratch = false })
+end
+
 --- :edit a real file and return its buffer. Wiped at cleanup.
 function H.edit(path)
   vim.cmd("silent! edit! " .. vim.fn.fnameescape(path))

@@ -23,17 +23,25 @@ return {
         delay = 200,
         filetypes_denylist = { "NvimTree", "toggleterm", "TelescopePrompt" },
         -- Illuminate re-resolves the symbol under the cursor on every CursorMoved,
-        -- and its regex provider scans the whole buffer to do it. Its own
-        -- large-file mechanism is used rather than the blanket switch-off in
-        -- config.bigfile, because here there is a middle option worth having:
-        -- keep the LSP provider (the server already has the document indexed, so
-        -- the answer costs a request) and drop the two that re-scan locally.
+        -- and its regex provider scans the whole buffer to do it. Its own cutoff
+        -- is used rather than the switch-off in config.bigfile because this one
+        -- needs no per-buffer call: above the cutoff illuminate disables itself.
         --
-        -- large_file_cutoff alone does nothing — illuminate only consults it when
-        -- large_file_overrides is also set (illuminate/config.lua), so the pair
-        -- has to be given together.
+        -- On its own, deliberately, with no large_file_overrides beside it:
+        -- config.get() returns the overrides table *instead of* the config rather
+        -- than merged over it (illuminate/config.lua), and the absent key is not
+        -- the no-op it looks like — large_file_overrides() falls back to
+        -- `{ filetypes_allowlist = { '_none' } }`, which is what switches
+        -- illuminate off entirely. Passing `{ providers = { "lsp" } }` here to keep
+        -- the cheap provider measurably made big files *worse*: delay fell from
+        -- 200ms to the 17ms floor and filetypes_denylist was emptied, so a 10k-line
+        -- buffer got a documentHighlight request every 17ms of cursor movement
+        -- where it had had none.
+        --
+        -- Byte-big files (a minified bundle: few lines, megabytes of them) are not
+        -- covered by this, since illuminate only compares line('$') — config.bigfile
+        -- stops those per buffer.
         large_file_cutoff = bigfile.MAX_LINES,
-        large_file_overrides = { providers = { "lsp" } },
       })
       vim.keymap.set("n", "]]", function() require("illuminate").goto_next_reference() end, { desc = "Next reference" })
       vim.keymap.set("n", "[[", function() require("illuminate").goto_prev_reference() end, { desc = "Prev reference" })
