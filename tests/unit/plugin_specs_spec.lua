@@ -281,6 +281,28 @@ describe("lua/plugins specs", function()
       end
     end)
 
+    it("gives every top-level spec an explicit load trigger", function()
+      -- This is deliberately a test rather than `defaults = { lazy = true }` in
+      -- init.lua. The default would make a spec added with no trigger silently
+      -- never load, which is a worse failure than the one it prevents: a plugin
+      -- that does nothing and reports nothing, versus a plugin that costs startup
+      -- time. Requiring the field instead makes the decision visible in review.
+      --
+      -- `dependencies` is not a trigger: lazy loads a dependency when its parent
+      -- loads, but the parent itself is still a start plugin unless it says
+      -- otherwise. Nested specs are exempt — a dependency's trigger is its
+      -- parent's.
+      for _, p in ipairs(S.toplevel()) do
+        local spec = p.spec
+        local where = ("%s in %s"):format(p.repo, vim.fn.fnamemodify(p.file, ":t"))
+        assert.equals("table", type(spec), where .. " is a bare string: no trigger and no lazy = false")
+        assert.is_true(
+          spec.lazy ~= nil or spec.event ~= nil or spec.cmd ~= nil
+            or spec.keys ~= nil or spec.ft ~= nil,
+          where .. ": declare event/cmd/keys/ft, or lazy = true/false, so the load point is on purpose")
+      end
+    end)
+
     it("gives every keys entry that is filetype-scoped a string or list ft", function()
       for _, k in ipairs(S.keys()) do
         if k.ft ~= nil then

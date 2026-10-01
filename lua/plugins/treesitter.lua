@@ -11,7 +11,13 @@ return {
     -- on the first buffer. The ts_auto_install autocmd registered in config
     -- below gets installed in the same window, for the same reason.
     event = { "BufReadPre", "BufNewFile" },
-    cmd = { "TSUpdate", "TSInstall", "TSInstallSync", "TSLog" },
+    -- Exactly the commands this branch defines (TSInstall, TSInstallFromGrammar,
+    -- TSLog, TSUninstall, TSUpdate — grep nvim_create_user_command in the plugin).
+    -- A name that does not exist is worse than a missing one: lazy creates a stub
+    -- for it, and invoking the stub loads the plugin, deletes the stub and then
+    -- fails with E492. TSInstallSync was such a name — it belongs to the old
+    -- master branch, not to `main`.
+    cmd = { "TSUpdate", "TSInstall", "TSInstallFromGrammar", "TSUninstall", "TSLog" },
     config = function()
       local ts = require("nvim-treesitter")
       -- jsonc isn't a separate parser — Neovim core already maps the

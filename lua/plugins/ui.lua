@@ -94,9 +94,24 @@ return {
     -- handler is the exact trigger. update_focused_file's auto-reveal only has
     -- anything to reveal once the tree is open, so nothing is lost by waiting.
     cmd = {
-      "NvimTreeToggle", "NvimTreeFindFile", "NvimTreeOpen",
-      "NvimTreeClose", "NvimTreeFocus", "NvimTreeRefresh",
+      "NvimTreeToggle", "NvimTreeFindFile", "NvimTreeFindFileToggle",
+      "NvimTreeOpen", "NvimTreeClose", "NvimTreeFocus", "NvimTreeRefresh",
+      "NvimTreeCollapse", "NvimTreeCollapseKeepBuffers", "NvimTreeResize",
+      "NvimTreeClipboard", "NvimTreeHiTest",
     },
+    -- `nvim .` / `nvim src/` is the other entry point, and it is not a command:
+    -- nvim-tree replaces a directory buffer through hijack_directories, which only
+    -- exists once setup() has run (its autocmd is registered from inside setup).
+    -- Waiting for :NvimTreeToggle meant `nvim .` opened netrw instead — measured,
+    -- `window fts: netrw`, which is what this used to be a start plugin for.
+    init = function()
+      if vim.fn.argc(-1) ~= 1 then return end
+      local arg = vim.fn.argv(0)
+      local stat = vim.uv.fs_stat(arg)
+      if stat and stat.type == "directory" then
+        require("lazy").load({ plugins = { "nvim-tree.lua" } })
+      end
+    end,
     dependencies = { "nvim-tree/nvim-web-devicons" },
     config = function()
       require("nvim-tree").setup({
@@ -145,6 +160,30 @@ return {
     -- buffers / oldfiles / notify, and calls require("telescope.builtin") for
     -- live_grep — which lazy's module loader also treats as a load trigger.
     cmd = "Telescope",
+    -- vim.ui.select is the third entry point and it is nobody's keymap: the
+    -- ui-select extension below replaces it, and that replacement only happens
+    -- when telescope loads. On `cmd` alone, a code action (Ctrl+./F4), jdtls's
+    -- Generate/Override menu or the debug-config picker taken before any finder
+    -- had been opened got Neovim's stock numbered command-line prompt for the
+    -- rest of the session — measured, vim.ui.select still pointing at
+    -- runtime/lua/vim/ui.lua.
+    --
+    -- A shim rather than an eager load: the first call pulls telescope in (which
+    -- installs the real override) and then forwards to it. The identity check is
+    -- what makes it safe — if load_extension ever fails, vim.ui.select is still
+    -- this function, and calling the captured stock one is the difference between
+    -- a plain prompt and infinite recursion.
+    init = function()
+      local stock = vim.ui.select
+      local shim
+      shim = function(items, opts, on_choice)
+        require("telescope")
+        local impl = vim.ui.select
+        if impl == shim then impl = stock end
+        return impl(items, opts, on_choice)
+      end
+      vim.ui.select = shim
+    end,
     dependencies = {
       "nvim-lua/plenary.nvim",
       { "nvim-telescope/telescope-fzf-native.nvim", build = "make" },
@@ -185,9 +224,16 @@ return {
       -- Registered here rather than in nvim-notify's own config: that direction
       -- would make notify `require("telescope")`, which is itself a load
       -- trigger, so configuring notifications would drag the whole finder in at
-      -- startup and undo the `cmd` above. pcall because notify is VeryLazy and
-      -- a Telescope invocation before that fires would find no extension.
-      pcall(telescope.load_extension, "notify")
+      -- startup and undo the `cmd` above.
+      --
+      -- The require is what makes it reliable rather than a pcall that may or may
+      -- not have had anything to register: the extension module requires notify, so
+      -- a Telescope invocation that beats VeryLazy (`nvim -c 'Telescope ...'`, or
+      -- the vim.ui.select shim above firing early) would otherwise swallow the
+      -- failure and leave `:Telescope notify` — which keymaps.lua binds — broken for
+      -- the session. notify is loaded a moment later by VeryLazy regardless.
+      require("notify")
+      telescope.load_extension("notify")
     end,
   },
 

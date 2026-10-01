@@ -32,10 +32,18 @@ return {
   -- Ensures LSP servers are installed; automatic_enable hands off to vim.lsp.enable
   {
     "williamboman/mason-lspconfig.nvim",
-    -- Loaded as a dependency of nvim-lspconfig, which is what fixes the order:
-    -- automatic_enable below calls vim.lsp.enable, and that has to happen before
-    -- filetype detection starts a server. lspconfig's BufReadPre trigger
-    -- guarantees it.
+    -- lazy = true with no trigger: reached as a dependency of nvim-lspconfig, or
+    -- by mason-tool-installer, which require()s this module to map lspconfig names
+    -- onto mason package names.
+    --
+    -- That second path is why automatic_enable is off below. It arrives at
+    -- VeryLazy, before any file has been read, so it can load this plugin while
+    -- nvim-lspconfig is not loaded and not even on the runtimepath (measured:
+    -- `is_enabled ts_ls=true` with `vim.lsp.config.ts_ls.cmd=nil`). Servers enabled
+    -- in that window have no cmd, no capabilities and no settings, and
+    -- vim.lsp.enable's can_start() rejects them silently — so setting a filetype
+    -- without reading a file, which is every scratch buffer and anything a plugin
+    -- creates, got no language server and no error for the whole session.
     lazy = true,
     dependencies = { "williamboman/mason.nvim" },
     config = function()
@@ -46,9 +54,14 @@ return {
           "emmet_language_server", "angularls", "harper_ls",
         },
         automatic_installation = true,
-        -- jdtls is started manually in ftplugin/java.lua with Lombok javaagent.
-        -- Exclude it here so mason-lspconfig doesn't launch a second bare instance.
-        automatic_enable = { exclude = { "jdtls" } },
+        -- Installation only; enabling is nvim-lspconfig's config's job, which calls
+        -- vim.lsp.enable() on exactly this list minus jdtls *after* setting every
+        -- vim.lsp.config() entry. automatic_enable was doing the same thing one
+        -- load-order race earlier — including, when mason-tool-installer got here
+        -- first, before nvim-lspconfig existed on the runtimepath at all. jdtls is
+        -- excluded from both, since ftplugin/java.lua starts it by hand with the
+        -- Lombok javaagent and a second bare instance would fight it.
+        automatic_enable = false,
       })
     end,
   },
@@ -70,6 +83,26 @@ return {
         ensure_installed = { "prettierd", "prettier", "vscode-spring-boot-tools" },
         run_on_start = true,
       })
+      -- Called by hand because VeryLazy is after VimEnter. run_on_start is invoked
+      -- from a VimEnter autocmd in the plugin's own plugin/ dir, so loading the
+      -- plugin any later than VimEnter means that autocmd is registered for an
+      -- event that has already passed and ensure_installed is never acted on —
+      -- measured by the mti_start augroup still being present (its callback deletes
+      -- it as its first statement). Invisible until a fresh machine, where prettier
+      -- never installs and conform then silently skips every JS/TS/CSS/YAML/MD
+      -- format on save.
+      --
+      -- run_on_start, not check_install, so the plugin's own start_delay and
+      -- debounce_hours settings still apply.
+      require("mason-tool-installer").run_on_start()
+      -- …and then drop the autocmd that was going to do it, which is now a
+      -- VimEnter listener for an event that has passed. Scheduled because lazy
+      -- sources a plugin's plugin/ directory around this config call, so deleting
+      -- the group inline can run before it has been created. Left in place it is
+      -- not inert: `:doautocmd VimEnter` (and anything that re-sources the config)
+      -- would run a second install check, and its presence is the exact signal
+      -- used to detect that ensure_installed never ran.
+      vim.schedule(function() pcall(vim.api.nvim_del_augroup_by_name, "mti_start") end)
     end,
   },
 
