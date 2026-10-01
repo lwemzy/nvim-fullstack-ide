@@ -750,11 +750,20 @@ return {
       cmp.setup({
         -- ── Responsiveness ──────────────────────────────────────────────────
         -- Tuned down from cmp's defaults (debounce 60 / throttle 30 /
-        -- fetching_timeout 500 / max_view_entries 200). max_view_entries is the
-        -- big one: ts_ls alone returns ~1000 items for a bare cursor and cssls
-        -- ~890 (measured), and cmp sorts + renders the whole set through 10
-        -- comparators on every keystroke. Capping the *view* keeps matching
-        -- intact while cutting the per-keystroke sort/render work by ~8x.
+        -- fetching_timeout 500 / max_view_entries 200). The debounce/throttle
+        -- pair is the half that actually shortens the keystroke-to-menu gap:
+        -- measured against a real Spring project, a jdtls completion round trip
+        -- is ~28ms on member access and ~41ms on a bare cursor, so cmp's stock
+        -- 90ms of deliberate waiting was the larger part of the delay.
+        --
+        -- max_view_entries caps *rendering*, not sorting. cmp/view.lua sorts the
+        -- full candidate set through all 9 comparators and only then slices to
+        -- this number, so it buys fewer extmarks and a readable popup rather than
+        -- less comparator work — an earlier version of this comment claimed it cut
+        -- per-keystroke work ~8x, which the code does not support. For scale, the
+        -- work it does not cut is small anyway: filtering plus sorting 1000 items
+        -- (ts_ls's reply to a bare cursor; cssls returns ~890) measures 0.8-1.9ms,
+        -- a few percent of the round trip it is waiting on.
         performance = {
           debounce = 20,
           throttle = 10,
