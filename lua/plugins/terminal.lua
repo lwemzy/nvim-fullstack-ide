@@ -1,6 +1,11 @@
 return {
   {
     "akinsho/toggleterm.nvim",
+    -- VeryLazy rather than `keys`/`cmd`: config below is what defines Ctrl+\,
+    -- Alt+G, F3 and Alt+R, and it also constructs the persistent Terminal
+    -- objects those keys toggle. Keying it would mean re-declaring all four
+    -- bindings in the spec purely as load triggers.
+    event = "VeryLazy",
     config = function()
       require("toggleterm").setup({
         size = function(term)

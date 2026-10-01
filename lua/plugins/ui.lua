@@ -5,6 +5,11 @@ return {
   -- Statusline
   {
     "nvim-lualine/lualine.nvim",
+    -- VeryLazy, not a start plugin: lualine only draws a line that is already
+    -- there (laststatus = 3 is set in lua/config/options.lua), so deferring it
+    -- past startup costs a default-looking statusline for the first few ms and
+    -- nothing else. The Run/Stop toolbar it hosts arrives with it.
+    event = "VeryLazy",
     dependencies = { "nvim-tree/nvim-web-devicons" },
     config = function()
       require("lualine").setup({
@@ -46,6 +51,9 @@ return {
 
   {
     "akinsho/bufferline.nvim",
+    -- VeryLazy for the same reason as lualine: it renders the tabline, which
+    -- nothing needs before the first buffer is on screen.
+    event = "VeryLazy",
     dependencies = { "nvim-tree/nvim-web-devicons" },
     config = function()
       require("bufferline").setup({
@@ -81,6 +89,14 @@ return {
   -- File explorer
   {
     "nvim-tree/nvim-tree.lua",
+    -- On its commands: lua/config/keymaps.lua reaches the tree by typing
+    -- :NvimTreeToggle / :NvimTreeFindFile (Ctrl+e / Ctrl+Shift+e), so lazy's cmd
+    -- handler is the exact trigger. update_focused_file's auto-reveal only has
+    -- anything to reveal once the tree is open, so nothing is lost by waiting.
+    cmd = {
+      "NvimTreeToggle", "NvimTreeFindFile", "NvimTreeOpen",
+      "NvimTreeClose", "NvimTreeFocus", "NvimTreeRefresh",
+    },
     dependencies = { "nvim-tree/nvim-web-devicons" },
     config = function()
       require("nvim-tree").setup({
@@ -123,6 +139,12 @@ return {
   -- Fuzzy finder
   {
     "nvim-telescope/telescope.nvim",
+    -- The single most expensive start plugin here (~30ms of requires), and
+    -- nothing needs it until a finder is opened. Every entry point is one of
+    -- these two: lua/config/keymaps.lua types :Telescope for find_files /
+    -- buffers / oldfiles / notify, and calls require("telescope.builtin") for
+    -- live_grep — which lazy's module loader also treats as a load trigger.
+    cmd = "Telescope",
     dependencies = {
       "nvim-lua/plenary.nvim",
       { "nvim-telescope/telescope-fzf-native.nvim", build = "make" },
@@ -160,6 +182,12 @@ return {
       })
       telescope.load_extension("fzf")
       telescope.load_extension("ui-select")
+      -- Registered here rather than in nvim-notify's own config: that direction
+      -- would make notify `require("telescope")`, which is itself a load
+      -- trigger, so configuring notifications would drag the whole finder in at
+      -- startup and undo the `cmd` above. pcall because notify is VeryLazy and
+      -- a Telescope invocation before that fires would find no extension.
+      pcall(telescope.load_extension, "notify")
     end,
   },
 
@@ -167,6 +195,9 @@ return {
   {
     "lukas-reineke/indent-blankline.nvim",
     main = "ibl",
+    -- Indent guides are per-buffer decoration, so there is nothing to draw
+    -- before a file is open.
+    event = { "BufReadPost", "BufNewFile" },
     config = function()
       require("ibl").setup({
         indent = { char = "│" },
@@ -225,6 +256,14 @@ return {
   -- Notifications + history
   {
     "rcarriga/nvim-notify",
+    -- VeryLazy rather than a start plugin, but deliberately no later: this
+    -- replaces vim.notify globally, and anything notified before it loads goes
+    -- to the plain :messages handler instead of a toast. VeryLazy fires right
+    -- after startup, so only startup-time messages can miss it — and those are
+    -- in :messages anyway, which is where you would look for them.
+    -- The Telescope extension for browsing history is registered from
+    -- telescope's config, not here; see the note there.
+    event = "VeryLazy",
     config = function()
       require("notify").setup({
         background_colour = "#1f2430",
@@ -232,10 +271,6 @@ return {
         stages = "fade_in_slide_out",
       })
       vim.notify = require("notify")
-
-      -- Load telescope extension so we can browse notification history
-      local ok, telescope = pcall(require, "telescope")
-      if ok then telescope.load_extension("notify") end
     end,
   },
 }

@@ -13,6 +13,12 @@ return {
   -- LSP installer UI
   {
     "williamboman/mason.nvim",
+    -- No trigger of its own: mason is only ever reached as a dependency of
+    -- mason-lspconfig / mason-tool-installer below, or by typing one of its
+    -- commands. Its registry alone costs ~25ms of requires at startup, and
+    -- nothing needs the installer UI before a server is asked for.
+    lazy = true,
+    cmd = { "Mason", "MasonInstall", "MasonUninstall", "MasonUninstallAll", "MasonLog", "MasonUpdate" },
     config = function()
       require("mason").setup({
         ui = {
@@ -26,6 +32,11 @@ return {
   -- Ensures LSP servers are installed; automatic_enable hands off to vim.lsp.enable
   {
     "williamboman/mason-lspconfig.nvim",
+    -- Loaded as a dependency of nvim-lspconfig, which is what fixes the order:
+    -- automatic_enable below calls vim.lsp.enable, and that has to happen before
+    -- filetype detection starts a server. lspconfig's BufReadPre trigger
+    -- guarantees it.
+    lazy = true,
     dependencies = { "williamboman/mason.nvim" },
     config = function()
       require("mason-lspconfig").setup({
@@ -45,6 +56,11 @@ return {
   -- Formatters
   {
     "WhoIsSethDaniel/mason-tool-installer.nvim",
+    -- run_on_start = true below means loading this plugin kicks off tool
+    -- downloads, which is the last thing that should share the startup budget.
+    -- VeryLazy runs it just after the session is usable instead.
+    event = "VeryLazy",
+    cmd = { "MasonToolsInstall", "MasonToolsUpdate", "MasonToolsClean" },
     dependencies = { "williamboman/mason.nvim" },
     config = function()
       require("mason-tool-installer").setup({
@@ -57,14 +73,24 @@ return {
     end,
   },
 
-  -- Schema store for JSON / YAML validation
-  { "b0o/schemastore.nvim" },
+  -- Schema store for JSON / YAML validation.
+  -- lazy = true: this is a pure data module, require()d from nvim-lspconfig's
+  -- config below, so lazy's module loader pulls it in exactly when jsonls/yamlls
+  -- are being configured.
+  { "b0o/schemastore.nvim", lazy = true },
 
   -- nvim-lspconfig: kept only for its runtime/lsp/ server definitions.
   -- We do NOT call require('lspconfig').X.setup() — that API is deprecated in
   -- nvim 0.11. We use vim.lsp.config / vim.lsp.enable instead.
   {
     "neovim/nvim-lspconfig",
+    -- BufReadPre/BufNewFile: this config block is what calls vim.lsp.config /
+    -- vim.lsp.enable and what installs the single LspAttach autocmd that binds
+    -- every LSP keymap, so all of it has to be in place before filetype
+    -- detection starts a server for the buffer being opened. BufReadPre is the
+    -- latest event that still precedes FileType, and it drags mason-lspconfig
+    -- and cmp-nvim-lsp in with it as dependencies.
+    event = { "BufReadPre", "BufNewFile" },
     dependencies = {
       "williamboman/mason-lspconfig.nvim",
       "hrsh7th/cmp-nvim-lsp",
@@ -695,6 +721,16 @@ return {
   -- ── Completion engine ───────────────────────────────────────────────────
   {
     "hrsh7th/nvim-cmp",
+    -- InsertEnter for the completion menu, CmdlineEnter for the two
+    -- cmp.setup.cmdline blocks at the bottom of this config -- without the
+    -- latter, ":" and "/" completion would only start working after the first
+    -- time insert mode had been entered.
+    --
+    -- Note what this does NOT defer: the LSP `capabilities` that advertise
+    -- completion to servers come from cmp-nvim-lsp, which is a dependency of
+    -- nvim-lspconfig above and loads with it. So servers are still told about
+    -- snippet/completion support at BufReadPre, whether or not cmp has loaded.
+    event = { "InsertEnter", "CmdlineEnter" },
     dependencies = {
       "hrsh7th/cmp-nvim-lsp",
       "hrsh7th/cmp-buffer",

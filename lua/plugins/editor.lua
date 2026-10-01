@@ -46,6 +46,12 @@ return {
   -- Commenting
   {
     "numToStr/Comment.nvim",
+    -- lazy = true with no trigger of its own: lua/config/keymaps.lua binds
+    -- Ctrl+/ (and the <C-_> spelling terminals actually send) to functions that
+    -- `require("Comment.api")` when pressed, and lazy's module loader loads the
+    -- plugin — running `config` first — on that require. Declaring the keys here
+    -- as well would just duplicate mappings that file already owns.
+    lazy = true,
     config = true,
   },
 
@@ -59,6 +65,10 @@ return {
   -- Git signs in gutter
   {
     "lewis6991/gitsigns.nvim",
+    -- BufReadPre, not VeryLazy: gitsigns' on_attach below is what binds ]g/[g
+    -- and the <leader>g* hunk keys per buffer, so it has to be loaded by the
+    -- time the first buffer attaches or those keys are missing on it.
+    event = { "BufReadPre", "BufNewFile" },
     config = function()
       require("gitsigns").setup({
         signs = {
@@ -111,6 +121,14 @@ return {
   -- Formatter
   {
     "stevearc/conform.nvim",
+    -- BufWritePre is the earliest event that implies formatting is about to
+    -- matter, and it still lands in time: `format_after_save` below registers a
+    -- BufWritePost autocmd from inside setup(), so loading on the *pre* half of
+    -- the very first write gets that autocmd installed before the *post* half
+    -- fires. Alt+L goes through require("conform") in lua/config/keymaps.lua,
+    -- which is a load trigger of its own.
+    event = "BufWritePre",
+    cmd = "ConformInfo",
     config = function()
       -- Projects with no prettier config of their own (no .prettierrc*, no
       -- prettier.config.*, no "prettier" key in package.json) get a project's
@@ -237,6 +255,9 @@ return {
   -- Better diagnostics list
   {
     "folke/trouble.nvim",
+    -- Alt+X in lua/config/keymaps.lua types :Trouble diagnostics toggle, so the
+    -- command is the whole entry point.
+    cmd = "Trouble",
     dependencies = { "nvim-tree/nvim-web-devicons" },
     config = true,
   },
@@ -254,6 +275,12 @@ return {
   -- Smooth scrolling
   {
     "karb94/neoscroll.nvim",
+    -- VeryLazy keeps the existing precedence intact: neoscroll's own <C-u>/<C-d>
+    -- mappings replace the plain `<C-d>zz` pair from lua/config/keymaps.lua, and
+    -- they did that before too by virtue of loading after it. Earlier than
+    -- VeryLazy would not change the outcome; later would leave a window where
+    -- scrolling is not animated.
+    event = "VeryLazy",
     config = function()
       require("neoscroll").setup({ mappings = { "<C-u>", "<C-d>" } })
     end,

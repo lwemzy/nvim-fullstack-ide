@@ -3,6 +3,15 @@ return {
     "nvim-treesitter/nvim-treesitter",
     branch = "main",
     build = ":TSUpdate",
+    -- BufReadPre, which is deliberately *before* filetype detection: the
+    -- treesitter_highlight autocmd in lua/config/autocmds.lua calls
+    -- vim.treesitter.start on FileType, and that needs this plugin's parser
+    -- directory on the runtimepath to find a parser at all. BufReadPre is the
+    -- last event that still precedes FileType, so highlighting is never missed
+    -- on the first buffer. The ts_auto_install autocmd registered in config
+    -- below gets installed in the same window, for the same reason.
+    event = { "BufReadPre", "BufNewFile" },
+    cmd = { "TSUpdate", "TSInstall", "TSInstallSync", "TSLog" },
     config = function()
       local ts = require("nvim-treesitter")
       -- jsonc isn't a separate parser — Neovim core already maps the
@@ -37,7 +46,11 @@ return {
   -- Rainbow delimiters — nested bracket/brace/paren colors via Treesitter
   {
     "HiPhish/rainbow-delimiters.nvim",
-    lazy = false,
+    -- Was lazy = false. BufReadPre and not BufReadPost: rainbow-delimiters
+    -- attaches through a FileType autocmd of its own, so loading it after
+    -- FileType has already fired would leave the *first* buffer of the session
+    -- uncoloured until it was re-edited.
+    event = { "BufReadPre", "BufNewFile" },
     config = function()
       vim.g.rainbow_delimiters = {
         strategy = {
@@ -94,6 +107,10 @@ return {
   -- Emmet: expand abbreviations like `div.card>h2+p` → full HTML
   {
     "olrtg/nvim-emmet",
+    -- VeryLazy preserves the existing precedence: emmet's Alt+E is set in config
+    -- below and deliberately lands after lua/config/keymaps.lua's own Alt+E
+    -- (diagnostic float), which is what happened when this was a start plugin.
+    event = "VeryLazy",
     config = function()
       vim.keymap.set({ "n", "v" }, "<M-e>", require("nvim-emmet").wrap_with_abbreviation, { desc = "Emmet: Wrap with abbreviation" })
     end,

@@ -18,6 +18,12 @@ return {
   {
     "ThePrimeagen/harpoon",
     branch = "harpoon2",
+    -- VeryLazy, not `keys`: the Alt+a / Alt+h / Alt+F1..F4 bindings are set
+    -- inside config below, and moving them into a lazy `keys` list would make
+    -- the list the load trigger *and* the mapping, duplicating what config
+    -- already does. VeryLazy loads it just after startup instead, which keeps
+    -- the keys defined by the time any of them can be pressed.
+    event = "VeryLazy",
     dependencies = { "nvim-lua/plenary.nvim" },
     config = function()
       local harpoon = require("harpoon")
@@ -62,6 +68,11 @@ return {
   -- ── Breadcrumbs (Class > method > line in winbar) ────────────────────────
   {
     "utilyre/barbecue.nvim",
+    -- BufReadPre: barbecue is what attaches nvim-navic to each LSP client, so it
+    -- has to exist before the first LspAttach or the winbar stays empty for that
+    -- buffer. BufReadPre runs ahead of filetype detection, hence ahead of the
+    -- server starting.
+    event = { "BufReadPre", "BufNewFile" },
     dependencies = {
       "SmiteshP/nvim-navic",
       "nvim-tree/nvim-web-devicons",
@@ -94,6 +105,10 @@ return {
   -- ── Better Code Folding ──────────────────────────────────────────────────
   {
     "kevinhwang91/nvim-ufo",
+    -- ~25ms of requires at startup for something that only decorates a loaded
+    -- buffer. BufReadPost rather than BufReadPre: ufo wants a buffer with
+    -- contents to compute fold ranges for, and the zR/zM maps below land with it.
+    event = { "BufReadPost", "BufNewFile" },
     dependencies = { "kevinhwang91/promise-async" },
     config = function()
       vim.o.foldlevel     = 99
@@ -149,6 +164,11 @@ return {
   -- ── Multi-cursor editing ─────────────────────────────────────────────────
   {
     "mg979/vim-visual-multi",
+    -- VeryLazy: vim-visual-multi is a classic vimscript plugin that installs its
+    -- own <C-n> mapping when sourced, so it has to load rather than be keyed.
+    -- `init` still runs before that (lazy guarantees it), which is what lets
+    -- VM_maps below be read.
+    event = "VeryLazy",
     init = function()
       -- Ctrl+N selects next occurrence (default — works in normal mode)
       vim.g.VM_maps = {
@@ -164,6 +184,10 @@ return {
   -- ── .env file syntax support ─────────────────────────────────────────────
   {
     "ellisonleao/dotenv.nvim",
+    -- VeryLazy: enable_on_load pulls the project's .env into the environment,
+    -- which matters to things started from the editor (:Run, the debug adapters)
+    -- and not to startup itself.
+    event = "VeryLazy",
     config = function()
       require("dotenv").setup({
         enable_on_load = true,
