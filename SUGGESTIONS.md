@@ -38,6 +38,25 @@ start plugins to 1 — the colorscheme:
 
 Minimum of 9 runs each, interleaved so both sides saw the same machine load.
 
+**What that table does and does not measure.** It is `nvim --headless
+--startuptime`, read at the `editing files in windows` line — startup up to the
+first paint. Headless never fires `UIEnter`, so it never fires `VeryLazy` either,
+and the `VeryLazy` burst is where 23 of the now-lazy plugins actually load
+(lualine, bufferline, which-key, notify, surround, mason-tool-installer and the
+rest). Measured separately in a real TTY, minimum of 5 runs:
+
+| | min | typical |
+|---|---|---|
+| to `UIEnter` (first paint) | 74ms | 105-160ms |
+| to the `VeryLazy` burst finishing | ~230ms | 330-460ms |
+
+So the honest claim is that the editor *appears* in ~31-74ms instead of ~334ms,
+and is fully furnished at ~230ms instead of ~334ms. The first number is the one
+that changes how starting the editor feels; the second is why the win is ~1.5x
+rather than ~10x. Both are improvements and only the first is dramatic — quoting
+31ms on its own would be measuring the part of the work that was moved rather
+than the part that was removed.
+
 **Completion latency — where the remaining time goes.** Per keystroke, against a
 real Spring Boot project:
 
@@ -144,6 +163,25 @@ now owns the thresholds and the opt-outs:
 **Worth revisiting if:** #2 is adopted *and* its snacks terminal provider turns out
 to be the one worth using — then the other modules come along for free and the
 housekeeping argument gets stronger.
+
+## Measured and rejected
+
+Small optimisations that looked right on paper and did not survive a measurement.
+Recorded so they do not get re-proposed.
+
+- **Caching the on-disk size in a buffer variable so `config.bigfile` stats a file
+  once per open instead of two or three times.** `vim.fn.getfsize` costs 1.9µs
+  here (10,000 calls, warm page cache — the file was just read), against 0.026µs
+  for `nvim_buf_line_count`. The whole saving is ~6µs per file opened, and the
+  cache would have to go stale for a file that grows while open, which is exactly
+  the log-tailing case the guard is for. Not worth a buffer variable.
+
+- **`defaults = { lazy = true }` in `init.lua`.** It would make a spec added with
+  no trigger silently never load, which is a worse failure than the one it
+  prevents: a plugin that does nothing and reports nothing, versus a plugin that
+  costs startup time and is visible in `--startuptime`. The guard is a test
+  instead — `plugin_specs_spec.lua`, "gives every top-level spec an explicit load
+  trigger" — so the decision stays visible in review.
 
 ## Deliberately not suggested
 
