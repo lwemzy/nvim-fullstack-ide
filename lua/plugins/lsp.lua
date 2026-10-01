@@ -32,7 +32,7 @@ return {
         ensure_installed = {
           "ts_ls", "jdtls", "lua_ls",
           "jsonls", "yamlls", "html", "cssls", "eslint",
-          "emmet_language_server", "angularls",
+          "emmet_language_server", "angularls", "harper_ls",
         },
         automatic_installation = true,
         -- jdtls is started manually in ftplugin/java.lua with Lombok javaagent.
@@ -645,7 +645,26 @@ return {
         ),
       })
 
-      vim.lsp.enable({ "ts_ls", "lua_ls", "jsonls", "yamlls", "html", "cssls", "eslint", "emmet_language_server", "angularls" })
+      -- Spelling/grammar checker for code comments, docstrings, commit messages
+      -- and prose (markdown). Splits identifiers on case/underscore before
+      -- checking, so it reads getUserId or get_user_id as "get user id" rather
+      -- than flagging the whole token — no separate camelCase/snake_case config
+      -- needed. Diagnostics + quick-fix code actions ride the same gate/on_attach
+      -- machinery as every other server above; nothing server-specific to wire.
+      -- lspconfig's own filetypes list already covers java/js/ts/lua/markdown/
+      -- gitcommit/html/sh/toml — extend it with javascriptreact, the one gap
+      -- for this config's stack (typescriptreact is already in the defaults).
+      vim.lsp.config("harper_ls", {
+        filetypes = vim.list_extend(
+          vim.deepcopy(vim.lsp.config.harper_ls.filetypes or {}),
+          { "javascriptreact" }
+        ),
+      })
+
+      vim.lsp.enable({
+        "ts_ls", "lua_ls", "jsonls", "yamlls", "html", "cssls", "eslint",
+        "emmet_language_server", "angularls", "harper_ls",
+      })
 
       -- ── LSP logging (warn + above written to ~/.local/state/nvim/lsp.log) ─
       vim.lsp.log.set_level(vim.log.levels.WARN)
