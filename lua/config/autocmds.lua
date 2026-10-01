@@ -54,22 +54,76 @@ autocmd("FileType", {
   end,
 })
 
+local bigfile = require("config.bigfile")
+
+-- Flag oversized buffers. Two events, because neither alone can see both halves
+-- of the test: at BufReadPre the buffer is still empty, so only the on-disk size
+-- is knowable — and that is the half that has to be known early, since LSP
+-- attach and the plugins' own BufReadPre/BufReadPost hooks all run before
+-- FileType. The line count only exists once the file is in the buffer, which is
+-- the FileType handler's turn below.
+--
+-- Flagged once and remembered in b:bigfile rather than recomputed per consumer,
+-- so one file cannot be big for treesitter and small for the LSP.
+autocmd("BufReadPre", {
+  group = augroup("bigfile_detect", { clear = true }),
+  callback = function(args)
+    if vim.bo[args.buf].buftype ~= "" then return end
+    if bigfile.is_big(args.buf) then vim.b[args.buf].bigfile = true end
+  end,
+})
+
 -- Enable treesitter highlighting for every buffer that has a parser.
 -- Load-bearing: nvim-treesitter `main` no longer starts highlighting itself.
--- Guarded on size and buftype because treesitter's incremental reparse is paid
--- on every edit *before* nvim-cmp even debounces — a 3MB/20k-line JSON costs
--- ~120ms to parse and ~24ms per keystroke to reparse, which reads as the
--- completion menu lagging. Big files fall back to regex syntax instead.
-local TS_MAX_LINES = 10000
-local TS_MAX_BYTES = 512 * 1024
+-- Guarded on buftype as well as size: a terminal or prompt buffer has a filetype
+-- but nothing to parse. Big files keep regex syntax instead — see
+-- lua/config/bigfile.lua for why that one is left on when everything else goes.
 autocmd("FileType", {
   group = augroup("treesitter_highlight", { clear = true }),
   callback = function(args)
     if vim.bo[args.buf].buftype ~= "" then return end
-    if vim.api.nvim_buf_line_count(args.buf) > TS_MAX_LINES then return end
-    local name = vim.api.nvim_buf_get_name(args.buf)
-    if name ~= "" and (vim.fn.getfsize(name) or 0) > TS_MAX_BYTES then return end
+    if not vim.b[args.buf].bigfile and bigfile.is_big(args.buf) then
+      vim.b[args.buf].bigfile = true
+    end
+    if vim.b[args.buf].bigfile then
+      bigfile.limit(args.buf)
+      return
+    end
     pcall(vim.treesitter.start, args.buf)
+  end,
+})
+
+-- Keep language servers off files nobody edits by hand. Detach-on-attach rather
+-- than declining to start the client: the servers here are started from several
+-- places (vim.lsp.enable via mason-lspconfig, ftplugin/java.lua's own
+-- start_or_attach) and LspAttach is the one point every one of them passes
+-- through, so this cannot be bypassed by adding a server later.
+--
+-- Notified, unlike every other limit in this file, because this is the only one
+-- whose symptom — no completion, no diagnostics, no go-to-definition — is
+-- indistinguishable from the LSP being broken. See bigfile.LSP_MAX_LINES for why
+-- the threshold is far above the decoration one.
+autocmd("LspAttach", {
+  group = augroup("bigfile_lsp", { clear = true }),
+  callback = function(args)
+    if vim.bo[args.buf].buftype ~= "" then return end
+    if not bigfile.is_too_big_for_lsp(args.buf) then return end
+    -- Scheduled, not immediate, and this is load-bearing: Client:on_attach
+    -- fires LspAttach and *then* sets `attached_buffers[bufnr]` as its very last
+    -- statement (runtime/lua/vim/lsp/client.lua). Detaching synchronously from
+    -- inside the event is therefore undone a moment later by that assignment —
+    -- the server keeps the document, with nothing to show the detach failed.
+    vim.schedule(function()
+      if not vim.api.nvim_buf_is_valid(args.buf) then return end
+      local client = vim.lsp.get_client_by_id(args.data.client_id)
+      if not client or not client.attached_buffers[args.buf] then return end
+      vim.lsp.buf_detach_client(args.buf, args.data.client_id)
+      vim.notify(
+        ("%s detached: file is over %d lines / %dMB, so LSP features are off here.")
+          :format(client.name, bigfile.LSP_MAX_LINES, bigfile.LSP_MAX_BYTES / 1024 / 1024),
+        vim.log.levels.WARN
+      )
+    end)
   end,
 })
 

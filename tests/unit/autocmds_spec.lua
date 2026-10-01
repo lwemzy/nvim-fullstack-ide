@@ -13,6 +13,10 @@
 -- other listener on the same event.
 
 local H = require("helpers")
+-- A real client, not a stub, for the bigfile_lsp group: the thing under test is
+-- that LspAttach fires and that buf_detach_client actually removes the buffer
+-- from the client, neither of which a fake table can show.
+local fake_lsp = require("helpers.fake_lsp")
 
 local function load_autocmds()
   -- The module returns nothing, so require() caches `true` and a second
@@ -29,6 +33,8 @@ local EXPECTED = {
   restore_cursor         = { BufReadPost = 1 },
   java_settings          = { FileType = 1 },
   close_with_q           = { FileType = 5 },
+  bigfile_detect         = { BufReadPre = 1 },
+  bigfile_lsp            = { LspAttach = 1 },
   treesitter_highlight   = { FileType = 1 },
   auto_save_stamp        = { BufReadPost = 1, BufWritePost = 1 },
   auto_save              = { FocusLost = 1, BufLeave = 1 },
@@ -301,6 +307,119 @@ describe("config.autocmds", function()
       assert.equals("nofile", vim.bo[buf].buftype)
       vim.bo[buf].filetype = "text"
       assert.equals(0, starts.count)
+    end)
+  end)
+
+  describe("bigfile_detect", function()
+    local bigfile
+
+    before_each(function()
+      load_autocmds()
+      H.disable_autosave()
+      bigfile = require("config.bigfile")
+    end)
+
+    --- A normal (buftype "") named buffer of `n` lines.
+    local function lines_buffer(n, tag)
+      local lines = {}
+      for i = 1, n do lines[i] = "line " .. i end
+      return H.scratch({ name = H.tmpdir(tag) .. "/" .. tag .. ".txt", lines = lines, scratch = false })
+    end
+
+    it("marks an over-limit buffer and turns off the per-edit decoration", function()
+      local buf = lines_buffer(bigfile.MAX_LINES + 1, "big")
+      vim.bo[buf].filetype = "text"
+
+      assert.is_true(vim.b[buf].bigfile)
+      -- 'synmaxcol', not 'syntax': regex highlighting is cheap enough to keep and
+      -- is what makes the file readable at all — the pathological case is the
+      -- regex engine on one enormous minified line, which this bounds.
+      assert.equals(200, vim.bo[buf].synmaxcol)
+      -- Writing the undo tree of a file this size on every save is the one
+      -- non-keystroke cost worth dropping with the rest.
+      assert.is_false(vim.bo[buf].undofile)
+    end)
+
+    it("leaves an ordinary buffer's options exactly alone", function()
+      local buf = lines_buffer(5, "small")
+      local before = vim.bo[buf].synmaxcol
+      vim.bo[buf].filetype = "text"
+
+      -- The guard has to be invisible on normal files: a stray synmaxcol of 200
+      -- here would silently stop highlighting past column 200 in every buffer.
+      assert.is_nil(vim.b[buf].bigfile)
+      assert.equals(before, vim.bo[buf].synmaxcol)
+    end)
+
+    it("marks a short file that is huge on disk, through a real read", function()
+      -- One ~600KB line: the line count says 1, so only the byte check can catch
+      -- it, and only BufReadPre knows the size before the plugins' own hooks run.
+      -- A real :edit rather than exec_autocmds, because the point is that the
+      -- size is read off disk during the actual load.
+      local path = H.write(H.tmpdir("wide") .. "/min.js", { string.rep("x", 600 * 1024) })
+      local buf = H.edit(path)
+
+      assert.is_true(vim.b[buf].bigfile)
+      assert.equals(200, vim.bo[buf].synmaxcol)
+    end)
+  end)
+
+  describe("bigfile_lsp", function()
+    local bigfile
+
+    before_each(function()
+      load_autocmds()
+      H.disable_autosave()
+      bigfile = require("config.bigfile")
+    end)
+
+    --- A real fake server attached to a normal buffer of `n` lines.
+    local function attach(n, tag)
+      local lines = {}
+      for i = 1, n do lines[i] = "line " .. i end
+      local buf = H.scratch({ name = H.tmpdir(tag) .. "/" .. tag .. ".txt", lines = lines, scratch = false })
+      -- A filetype first, so the order matches reality: detection runs, then a
+      -- server attaches. "text" rather than "java" deliberately — setting java
+      -- would run this repo's own ftplugin and start a real jdtls.
+      vim.bo[buf].filetype = "text"
+      local srv, notes
+      notes = H.capture_notifications(function()
+        srv = fake_lsp.start({ name = "jdtls", bufnr = buf, root_dir = H.tmpdir("root-" .. tag) })
+        -- The wait is inside the capture because the detach is scheduled rather
+        -- than immediate (see the LspAttach handler's comment: on_attach
+        -- re-registers the buffer after the event, so a synchronous detach is
+        -- silently undone). Nothing has been decided when start() returns, and
+        -- the notification arrives with the detach.
+        vim.wait(200, function() return #vim.lsp.get_clients({ bufnr = buf }) == 0 end)
+      end)
+      H.track_client(srv.id)
+      return buf, srv, notes
+    end
+
+    it("keeps the server on a merely large file", function()
+      -- The regression this exists to prevent: a 10k-line Java class is ordinary
+      -- in a real project, it is over the *decoration* limit, and detaching jdtls
+      -- there would take completion and diagnostics with it.
+      local buf, srv, notes = attach(bigfile.MAX_LINES + 1, "large")
+
+      assert.is_true(vim.b[buf].bigfile)
+      assert.is_truthy(vim.lsp.get_client_by_id(srv.id))
+      assert.same({ buf }, vim.tbl_keys(vim.lsp.get_client_by_id(srv.id).attached_buffers))
+      assert.same({}, notes)
+    end)
+
+    it("detaches the server from a file nobody edits by hand, and says so", function()
+      local buf, srv, notes = attach(bigfile.LSP_MAX_LINES + 1, "huge")
+
+      -- Detached from this buffer, not stopped: another buffer of the same
+      -- project may still need the client.
+      assert.is_nil(vim.lsp.get_client_by_id(srv.id).attached_buffers[buf])
+      assert.equals(0, #vim.lsp.get_clients({ bufnr = buf }))
+      -- Notified, unlike every other limit here, because the symptom is
+      -- indistinguishable from the LSP simply being broken in that file.
+      assert.equals(1, #notes)
+      assert.equals(vim.log.levels.WARN, notes[1].level)
+      assert.is_truthy(notes[1].msg:find("jdtls", 1, true))
     end)
   end)
 

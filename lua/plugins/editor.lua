@@ -17,10 +17,23 @@ return {
     "RRethy/vim-illuminate",
     event = { "BufReadPost", "BufNewFile" },
     config = function()
+      local bigfile = require("config.bigfile")
       require("illuminate").configure({
         providers = { "lsp", "treesitter", "regex" },
         delay = 200,
         filetypes_denylist = { "NvimTree", "toggleterm", "TelescopePrompt" },
+        -- Illuminate re-resolves the symbol under the cursor on every CursorMoved,
+        -- and its regex provider scans the whole buffer to do it. Its own
+        -- large-file mechanism is used rather than the blanket switch-off in
+        -- config.bigfile, because here there is a middle option worth having:
+        -- keep the LSP provider (the server already has the document indexed, so
+        -- the answer costs a request) and drop the two that re-scan locally.
+        --
+        -- large_file_cutoff alone does nothing — illuminate only consults it when
+        -- large_file_overrides is also set (illuminate/config.lua), so the pair
+        -- has to be given together.
+        large_file_cutoff = bigfile.MAX_LINES,
+        large_file_overrides = { providers = { "lsp" } },
       })
       vim.keymap.set("n", "]]", function() require("illuminate").goto_next_reference() end, { desc = "Next reference" })
       vim.keymap.set("n", "[[", function() require("illuminate").goto_prev_reference() end, { desc = "Prev reference" })
