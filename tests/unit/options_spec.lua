@@ -255,6 +255,39 @@ describe("config.options", function()
     end)
   end)
 
+  describe("tool discovery", function()
+    -- These two cover the one thing in config.options that is not a vim option:
+    -- the mason bin dir on PATH. It lives here rather than in mason.nvim's setup
+    -- because mason is lazy-loaded, and conform decides a formatter is
+    -- "available" with a bare vim.fn.executable() against the process PATH —
+    -- ignoring the formatter's own env.PATH — so without this, prettier and
+    -- every other mason-installed tool is silently skipped on save.
+    it("puts mason's bin dir on PATH", function()
+      local mason_bin = vim.fn.stdpath("data") .. "/mason/bin"
+      assert.is_truthy(
+        (":" .. vim.env.PATH .. ":"):find(":" .. mason_bin .. ":", 1, true),
+        "mason bin not on PATH: " .. vim.env.PATH
+      )
+    end)
+
+    it("prepends it, and only once however many times it loads", function()
+      local mason_bin = vim.fn.stdpath("data") .. "/mason/bin"
+      -- Prepended: mason's own default is PATH = "prepend", and resolution order
+      -- has to stay what it was while mason.setup() did this.
+      assert.equals(mason_bin, vim.split(vim.env.PATH, ":", { plain = true })[1])
+      -- Guarded against duplicates, because mason.setup() prepends it again the
+      -- moment the installer does load — and an unbounded PATH is passed to
+      -- every job this editor spawns.
+      load_options()
+      load_options()
+      local n = 0
+      for _, entry in ipairs(vim.split(vim.env.PATH, ":", { plain = true })) do
+        if entry == mason_bin then n = n + 1 end
+      end
+      assert.equals(1, n)
+    end)
+  end)
+
   describe("module", function()
     it("is idempotent: a second load changes nothing", function()
       -- init.lua requires this once, but a :source of the config or a plugin
