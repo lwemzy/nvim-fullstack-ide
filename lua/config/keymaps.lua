@@ -38,12 +38,19 @@ map("n", "<C-Up>",    ":resize +2<CR>",          { silent = true, desc = "Resize
 map("n", "<C-Down>",  ":resize -2<CR>",          { silent = true, desc = "Resize split shorter" })
 map("n", "<C-Left>",  ":vertical resize -2<CR>", { silent = true, desc = "Resize split narrower" })
 map("n", "<C-Right>", ":vertical resize +2<CR>", { silent = true, desc = "Resize split wider" })
--- The four above are dead keys on this platform, and both obvious alternates are
--- taken: macOS claims plain Ctrl+arrow for Mission Control (switch Spaces /
--- Exposé) at the OS level, and Ghostty hard-binds Cmd+arrow to shell readline
--- (start/end-of-line) and scrollback prompt-jump — so neither ever reaches nvim.
--- Ctrl+Shift+arrow is unclaimed by both and is the one that actually arrives
--- (Ghostty's side verified against `ghostty +show-config --default`).
+-- The four above are dead keys on this platform: macOS claims plain Ctrl+arrow
+-- for Mission Control (switch Spaces / Exposé) at the OS level, so it never
+-- reaches the terminal. Cmd+arrow was tried as the replacement and measured as
+-- never arriving either; Ctrl+Shift+arrow does arrive, and is what this branch
+-- uses.
+--
+-- Ghostty is *not* why Cmd+arrow fails, which is worth recording because the
+-- obvious fix follows from the wrong cause: `ghostty +list-keybinds` has no bind
+-- for super+arrow in either its defaults or this machine's config, so there is no
+-- Ghostty keybind to unbind. Whatever eats the chord sits above that layer
+-- (macOS's own Cmd+arrow line-navigation handling is the likely candidate), and
+-- it was not pinned down further — the choice here rests on the measurement, not
+-- on the explanation.
 --
 -- Ctrl+arrow is left in place rather than replaced: these mappings cost nothing
 -- when the keys never fire, and keeping them means this file stays a superset of
