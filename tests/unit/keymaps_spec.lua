@@ -96,6 +96,7 @@ local MAPPINGS = {
 
   -- Format.
   { "n", "<M-l>", "Format file" },
+  { "n", "<leader>uf", "Toggle format on save" },
 
   -- LSP actions.
   { "n", "<F2>", "Rename symbol" },

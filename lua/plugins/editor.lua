@@ -259,7 +259,14 @@ return {
         -- formatting path for Java — ftplugin/java.lua's own BufWritePre copy
         -- was removed, since the two together cost three formatting round trips
         -- per write.
-        format_after_save = function()
+        -- On by default, and switchable with <leader>uf (lua/config/keymaps.lua).
+        -- Returning nil is conform's own documented way to skip a save:
+        -- `format_args, callback = format_args(args.buf)` followed by
+        -- `if format_args then` (conform/init.lua), so the BufWritePost autocmd
+        -- stays registered either way and a write with formatting off costs one
+        -- table lookup.
+        format_after_save = function(bufnr)
+          if not require("config.format").enabled(bufnr) then return nil end
           return {
             timeout_ms  = 5000,
             lsp_format  = "fallback",

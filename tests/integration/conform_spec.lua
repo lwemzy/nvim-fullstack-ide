@@ -261,6 +261,38 @@ describe("conform formatter selection", function()
       assert.equals(1, H.count_autocmds("BufWritePost", "Conform"))
     end)
 
+    it("stops formatting on save once the toggle is off", function()
+      -- Asserted through conform.format rather than by checking the file's
+      -- contents, because a file that was already well-formatted looks
+      -- identical either way. Through H.stub so after_each's H.cleanup puts it
+      -- back: leaving this set would turn format-on-save off for every spec
+      -- that runs after this one.
+      local path = H.write(H.tmpdir("gateoff") .. "/note.md", { "# hi" })
+      local buf = H.scratch({ name = path, lines = { "# hi" } })
+      local formats = H.spy(conform, "format")
+      H.stub(vim.g, "autoformat", false)
+
+      vim.api.nvim_exec_autocmds("BufWritePost", { buffer = buf, group = "Conform" })
+
+      assert.equals(0, formats.count)
+    end)
+
+    it("lets one buffer opt out of a session that formats", function()
+      -- vim.b beats vim.g, which is the case the precedence order in
+      -- config.format exists for: a generated or vendored file you do not want
+      -- rewritten, in a session where everything else formats on save.
+      local path = H.write(H.tmpdir("gatebuf") .. "/note.md", { "# hi" })
+      local buf = H.scratch({ name = path, lines = { "# hi" } })
+      local formats = H.spy(conform, "format")
+      vim.b[buf].autoformat = false
+
+      vim.api.nvim_exec_autocmds("BufWritePost", { buffer = buf, group = "Conform" })
+
+      assert.equals(0, formats.count)
+      -- The opt-out must be exactly that, not a change to the session setting.
+      assert.is_nil(vim.g.autoformat)
+    end)
+
     it("passes timeout_ms=5000 and lsp_format=fallback on every write", function()
       local path = H.write(H.tmpdir("aftersave") .. "/note.md", { "# hi" })
       local buf = H.scratch({ name = path, lines = { "# hi" } })

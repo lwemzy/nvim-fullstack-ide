@@ -64,8 +64,11 @@ map({ "n", "i" }, "<C-s>", "<Esc>:w<CR>",  { silent = true, desc = "Save file" }
 map("n", "<C-q>", ":qa<CR>", { silent = true, desc = "Quit all" })
 
 -- ── Format ─────────────────────────────────────────────────────────────────
--- Format-on-save handles this automatically (configured in editor.lua).
--- C-\ is reserved for toggleterm. Manual format via Alt+L (like IntelliJ Ctrl+Alt+L).
+-- Format-on-save handles this automatically (configured in editor.lua) and is
+-- on by default; leader+uf turns it off and on for the session. Alt+L formats
+-- on demand and works either way. C-\ is reserved for toggleterm, and Alt+L
+-- matches IntelliJ's Ctrl+Alt+L.
+--
 -- lsp_format = "fallback", not the old lsp_fallback = true: conform still
 -- translates the old key (conform/init.lua's "For backwards compatibility"
 -- block) but it is deprecated and undocumented now, so a future release
@@ -75,6 +78,11 @@ map("n", "<C-q>", ":qa<CR>", { silent = true, desc = "Quit all" })
 map("n", "<M-l>", function()
   require("conform").format({ async = true, lsp_format = "fallback" })
 end, { desc = "Format file" })
+-- Under the existing leader+u "ui toggles" group (see plugins/ui.lua's which-key
+-- spec), alongside leader+uh for inlay hints, rather than another Alt chord.
+map("n", "<leader>uf", function()
+  require("config.format").toggle()
+end, { desc = "Toggle format on save" })
 
 -- ── LSP actions ───────────────────────────────────────────────────────────
 map("n", "<F2>",  vim.lsp.buf.rename,                   { desc = "Rename symbol" })

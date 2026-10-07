@@ -625,6 +625,15 @@ return {
             group = group,
             buffer = bufnr,
             callback = function()
+              -- Same switch as conform's format_after_save in
+              -- lua/plugins/editor.lua: eslint --fix rewrites the buffer on
+              -- save, so if this ignored the toggle then turning format-on-save
+              -- off would still leave JS and TS files reformatting themselves —
+              -- the one place the setting would look broken. It is a lint
+              -- autofix rather than a formatter, so if the import-sorting and
+              -- unused-var fixes are ever wanted independently of prettier,
+              -- give this its own flag rather than splitting config.format.
+              if not require("config.format").enabled(bufnr) then return end
               pcall(vim.cmd, "LspEslintFixAll")
             end,
           })
