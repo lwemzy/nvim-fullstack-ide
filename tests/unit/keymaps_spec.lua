@@ -109,6 +109,7 @@ local MAPPINGS = {
   { "n", "[d", "Prev diagnostic" },
   { "n", "<M-e>", "Show diagnostic detail" },
   { "n", "<M-x>", "Diagnostics list" },
+  { "n", "<M-q>", "Build problems" },
 
   -- Run / debug the project (the keyboard half of the statusline toolbar).
   { "n", "<leader>rr", "Run project" },
@@ -116,6 +117,10 @@ local MAPPINGS = {
   { "n", "<leader>rs", "Stop project" },
   { "n", "<leader>rd", "Debug project" },
   { "n", "<leader>ra", "Attach debugger" },
+  { "n", "<leader>rt", "Run a build task" },
+
+  -- Counterpart file.
+  { "n", "<leader>fa", "Open counterpart file" },
 
   -- Buffer tabs.
   { "n", "<S-l>", "Next buffer" },

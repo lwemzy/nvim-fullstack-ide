@@ -285,6 +285,32 @@ local config = {
     map("<C-S-v>", jdtls.extract_variable,      "Extract variable")
     map("<C-S-c>", jdtls.extract_constant,      "Extract constant")
 
+    -- Source generators (IntelliJ's Alt+Insert), under the existing <leader>j
+    -- "java" group. Not Alt+Insert itself: Insert is not a key every keyboard
+    -- this config runs on has, and <M-Insert> is not forwarded by several
+    -- terminal emulators — the same reason <C-S-t> was rejected for <M-o>.
+    --
+    -- The kind strings and the client-side handler the accessors action needs
+    -- live in lua/config/java_source.lua; see its header for why that handler has
+    -- to exist at all.
+    local java_source = require("config.java_source")
+    java_source.setup()
+    local generate = function(keys, kind, desc)
+      map(keys, java_source.generate(java_source.KINDS[kind]), "Java: " .. desc)
+    end
+    -- <leader>jgg first because it is the one to reach for when you do not
+    -- remember the others: source.generate is the parent kind, so it offers
+    -- every generator below in one picker.
+    generate("<leader>jgg", "all",              "Generate… (all source actions)")
+    generate("<leader>jga", "accessors",        "Generate getters/setters")
+    generate("<leader>jgc", "constructors",     "Generate constructor")
+    generate("<leader>jgt", "to_string",        "Generate toString()")
+    generate("<leader>jge", "hash_code_equals", "Generate equals()/hashCode()")
+    generate("<leader>jgd", "delegates",        "Generate delegate methods")
+    generate("<leader>jgo", "override",         "Override/implement methods")
+    generate("<leader>jgf", "final_modifiers",  "Add final where possible")
+    generate("<leader>jgs", "sort_members",     "Sort members")
+
     -- Debug keymaps (F9/F10/F11 are taken by Java tools above)
     map("<leader>db", function() require("dap").toggle_breakpoint() end, "Debug: Toggle breakpoint")
     map("<leader>dB", function()

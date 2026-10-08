@@ -96,8 +96,8 @@ end
 ---
 --- opts.dir runs it there (the project root, not the cwd nvim happens to have);
 --- opts.env adds environment variables (see build_env); opts.on_exit is called
---- when the process ends. Returns the Terminal, or nil when toggleterm is not
---- available.
+--- with the process's exit code when it ends. Returns the Terminal, or nil when
+--- toggleterm is not available.
 function M.run_in_terminal(cmd, opts)
   opts = opts or {}
   local ok, terminal = pcall(require, "toggleterm.terminal")
@@ -112,11 +112,14 @@ function M.run_in_terminal(cmd, opts)
     env = opts.env,
     direction = "horizontal",
     close_on_exit = false,
-    on_exit = function()
+    -- toggleterm invokes this as `term:on_exit(job, exit_code, event)`, so the
+    -- first positional argument is the Terminal itself. Taking `code` by
+    -- position is what lets callers tell a failed build from a clean one.
+    on_exit = function(_, _, code)
       -- The toolbar's Stop/Restart buttons appear and disappear with this, and a
       -- build that fails on its own has to take them away without a keypress.
       vim.schedule(M.refresh)
-      if opts.on_exit then opts.on_exit() end
+      if opts.on_exit then opts.on_exit(code) end
     end,
   })
   table.insert(run_terms, t)
@@ -169,6 +172,24 @@ local function package_manager(dir)
   return "npm"
 end
 
+--- The base invocation for `tool` in `dir`: the project's own wrapper when there
+--- is one, otherwise whatever is on PATH.
+---
+--- Shared with the task picker (lua/config/tasks.lua) through M.tool_cmd below,
+--- which is why it is a function rather than the two inline
+--- `wrapper(dir, "mvnw") or "mvn"` expressions it replaces. A picker that ran
+--- `gradle test` while the Run button ran `./gradlew bootRun` would use a
+--- different Gradle version than the project pins, which is the whole reason the
+--- wrapper exists.
+local function tool_cmd(dir, tool)
+  if tool == "maven" then return wrapper(dir, "mvnw") or "mvn" end
+  if tool == "gradle" then return wrapper(dir, "gradlew") or "gradle" end
+  -- npm/pnpm/yarn/bun/npx are themselves the command; `jdtls` is not a build
+  -- tool at all (see java_target) and has nothing to invoke.
+  if tool == "jdtls" then return nil end
+  return tool
+end
+
 --- The first of NODE_SCRIPTS that `dir`'s package.json defines, or nil.
 local function node_script(dir)
   local path = dir .. "/package.json"
@@ -215,7 +236,7 @@ local function java_target(source, build_files)
   }
 
   if spring and tool == "maven" then
-    local mvn = wrapper(dir, "mvnw") or "mvn"
+    local mvn = tool_cmd(dir, "maven")
     target.cmd = mvn .. " spring-boot:run"
     -- suspend=n: the app starts and serves immediately, and the debugger attaches
     -- as soon as the port opens. suspend=y would hold a web app before its first
@@ -226,7 +247,7 @@ local function java_target(source, build_files)
       .. JDWP_PORT
       .. '"'
   elseif spring then
-    local gradle = wrapper(dir, "gradlew") or "gradle"
+    local gradle = tool_cmd(dir, "gradle")
     target.cmd = gradle .. " bootRun"
     -- Gradle's own flag, and the only way to get JVM args into bootRun without
     -- editing build.gradle. It implies suspend=y (JavaExec's debugOptions default,
@@ -591,17 +612,63 @@ local function build_env(target)
   return { JAVA_HOME = pick.path }
 end
 
---- Start `cmd` for `target` and record it as that target's job.
-local function start_terminal(target, cmd, mode)
-  local term = M.run_in_terminal(cmd, {
+--- Run `cmd` in `target`'s directory, with its JDK, and parse what it prints.
+---
+--- On exit the terminal's output goes through lua/config/problems.lua into the
+--- quickfix list, so a failed compile is navigable instead of merely on screen.
+--- Scheduled rather than immediate: on_exit runs inside the job callback, before
+--- TermClose has been processed, so the read happens once toggleterm and libvterm
+--- have finished with the buffer. The M.refresh that used to be here is gone —
+--- M.run_in_terminal already schedules one, and this was a redundant second.
+local function build_terminal(target, cmd)
+  -- Declared before the call, not `local term = M.run_in_terminal(...)`: a Lua
+  -- local is not in scope inside its own initialiser, so the closure below would
+  -- have captured a global nil and the capture would silently never happen.
+  local term
+  term = M.run_in_terminal(cmd, {
     dir = target.dir,
     env = build_env(target),
-    on_exit = function() M.refresh() end,
+    on_exit = function()
+      vim.schedule(function()
+        pcall(function()
+          require("config.problems").capture(term and term.bufnr, target, { title = target.label })
+        end)
+      end)
+    end,
   })
+  return term
+end
+
+--- Start `cmd` for `target` and record it as that target's job.
+local function start_terminal(target, cmd, mode)
+  local term = build_terminal(target, cmd)
   if not term then return nil end
   jobs[target.id] = { target = target, term = term, mode = mode }
   M.refresh()
   return term
+end
+
+--- The base invocation for `target`'s build tool, wrapper-aware, or nil when the
+--- target has no build tool. For lua/config/tasks.lua.
+function M.tool_cmd(target)
+  if not (target and target.dir and target.tool) then return nil end
+  return tool_cmd(target.dir, target.tool)
+end
+
+--- Run a one-off build command for `target` — a task from the picker, not the
+--- project's own run.
+---
+--- Deliberately NOT registered in `jobs`: that table is what the toolbar's
+--- Stop/Restart buttons act on and what M.is_running answers from, and
+--- `gradlew test` is not the application running. Registering it would offer a
+--- Restart button that restarts bootRun instead of the test, and would make Run
+--- refuse to start ("already running") while a test was in progress.
+---
+--- It still gets build_env and the quickfix capture, which are the two things
+--- that make a task useful rather than just a terminal with a command typed in.
+function M.run_task(target, cmd)
+  if not target then return nil end
+  return build_terminal(target, cmd)
 end
 
 --- Start `target`, or focus it if it is already running.
@@ -941,6 +1008,13 @@ function M.setup()
       desc = "Runner: " .. action .. " the current project's target",
     })
   end
+
+  -- Registered here rather than in config.tasks so the module itself stays
+  -- unloaded until the picker is actually opened — the Gradle task cache and the
+  -- lists it holds are not worth parsing in a session that never builds anything.
+  vim.api.nvim_create_user_command("RunTask", function()
+    require("config.tasks").pick()
+  end, { desc = "Runner: pick a build task (test, lint, clean, …)" })
 end
 
 return M

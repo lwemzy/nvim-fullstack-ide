@@ -281,6 +281,7 @@ return {
         { "<leader>f", group = "find / format" },
         { "<leader>g", group = "git" },
         { "<leader>j", group = "java" },
+        { "<leader>jg", group = "generate (java)" },
         { "<leader>l", group = "lsp" },
         { "<leader>r", group = "run / debug" },
         { "<leader>s", group = "split" },

@@ -21,6 +21,12 @@ because the reasoning is the part worth not repeating.
 | 5 | `Rahularya01/tether.nvim` | **Researched, not yet trialed.** A second, newer candidate for the same slot as #2 — same IDE protocol, plus edits land as an explicit accept/reject diff instead of writing straight to disk. |
 | 6 | `janbuchar/difftsigns.nvim` | **Researched, not yet trialed.** Small `gitsigns.nvim` complement — dims pure-reformat noise in the gutter using difftastic. |
 | 7 | `Mestane/blink-cmp-deps` | **Not actionable now.** Maven/Gradle coordinate completion, but it's a `blink.cmp` source, and #1 is deferred. |
+| 8 | Build output → quickfix (SpaceVim `problemMatcher`) | **Adopted.** `lua/config/problems.lua`, on `<M-q>`. Error formats are Neovim's own from `$VIMRUNTIME/compiler`, not hand-written. Needed a dedup nobody would predict: Gradle prints each javac error twice. |
+| 9 | jdtls `source.generate.*` keymaps (SpaceVim `SPC l g`) | **Adopted.** Nine keys under `<leader>jg`, all verified against a running jdtls. Getters/setters needed the handler nvim-jdtls is missing (`lua/config/java_source.lua`). |
+| 10 | Alternate file, class ↔ test (SpaceVim `a.vim`) | **Adopted.** `lua/config/alternate.lua`, on `<leader>fa` and `:A`. Not `<M-o>` — neotest already owns it, silently. |
+| 11 | `Trouble symbols` outline sidebar (SpaceVim `tagbar`) | **Adopted.** One keymap, `<leader>lo`, gated on `textDocument/documentSymbol`. No new plugin. |
+| 12 | Task picker with auto-detection (SpaceVim tasks) | **Adopted.** `lua/config/tasks.lua`, on `<leader>rt`. Gradle discovery is async with an on-disk cache keyed on the build files, as the condition below required. |
+| 13 | `mbbill/undotree` | **Adopted.** `cmd`-triggered, `<leader>uu`. `g:undotree_*` in `init`, not `config` — the vimscript plugin reads them at source time. |
 
 ## What was actually slow
 
@@ -302,6 +308,307 @@ anywhere. Noting it because this config currently has **no** XML language server
 at all — `emmet_language_server` was extended to the `xml` filetype
 (`lua/plugins/lsp.lua`), so what `pom.xml` gets today is HTML tag abbreviations.
 That is a separate proposal from this one, and Gradle would still be uncovered.
+
+# Mined from SpaceVim (2026-10-07)
+
+`wsdjeg/SpaceVim` read at `master`. It is a VimL-era distribution — its plugin
+list is mostly superseded here (denite, unite, ctrlp, leaderf, neomake, ale,
+deoplete, vim-javacomplete2, tagbar, nerdtree), so **none** of its plugin choices
+are worth importing. Its *feature* design is a different matter: it has spent a
+decade being an IDE for Java and web work specifically, and six of its ideas land
+on things this config does not do at all. Those are #8–#13.
+
+Each was checked against the code here before being written down, and two of them
+turned up a verified caveat that changes the shape of the work.
+
+## 8. Build output → quickfix — SpaceVim's `problemMatcher`
+
+**Adopted** (`lua/config/problems.lua`, `<M-q>`). Three things the research below
+did not anticipate, all found by running it:
+
+* **Gradle prints every javac diagnostic twice** — once as the task's own output
+  and again indented two spaces under `* What went wrong:` — and vim's
+  errorformat skips leading whitespace, so both copies match. One missing
+  semicolon read as "2 problems (2 errors)", the second row with its column two
+  further right because the `%p^` caret line is indented with it. `M.parse` now
+  dedups on file+line+severity+text, keeping the first (correctly-columned) copy.
+* **The output is read from the terminal *buffer* on exit, not through
+  `on_stdout`.** The job is a pty, so `on_stdout` delivers ANSI colour, cursor
+  moves and Gradle's carriage-return progress bar as raw bytes; libvterm has
+  already undone all of that by the time the lines are in the buffer.
+* **`getqflist({ lines, efm })` resolves `%f` against Neovim's cwd**, not the
+  directory the build ran in, so every relative `tsc` path pointed at the wrong
+  file. Fixed with make's own directory-stack convention — a synthetic
+  `Entering directory '…'` line prepended to the output.
+
+It also does *not* open the quickfix window: the build's terminal is on screen
+and usually focused, and stealing focus out of a terminal mid-keystroke is worse
+than a notification naming the key. A clean build clears the list, but only if
+the list it would clear is one of its own (title prefix `Build: `) — `grug-far`,
+`Telescope quickfix` and `:Trouble qflist` all share that list.
+
+`vim-unstack`'s stack-trace half is **not** done and is still a real gap.
+
+The original case for it:
+
+SpaceVim's task definitions carry a `problemMatcher` — either an `errorformat` or
+a `{ regexp, file, line, column, message }` mapping — and the task's output is
+parsed through it into the quickfix list (`autoload/SpaceVim/plugins/tasks.vim`,
+`.SpaceVim.d/tasks.toml`). It is VSCode's `tasks.json` idea, in Vim.
+
+Here, `lua/config/runner.lua` streams `gradlew bootRun` / `mvn spring-boot:run` /
+`npm start` into a toggleterm buffer and that is where it ends. Grepped the whole
+of `lua/`: there is no `errorformat`, no `setqflist`, no `copen` anywhere in this
+config. So a Java compile error or a `tsc` type error is **text in a terminal** —
+readable, not navigable. The IDE move it blocks is the common one: build fails,
+jump to the first error, fix, rebuild.
+
+The work: an `errorformat` per target kind in `config.runner` (javac/gradle for
+Java, `tsc`'s own for the web targets), parse the terminal job's output into
+quickfix, and open it only on a non-zero exit. Two things to get right —
+`run_in_terminal` currently owns the output and the scrollback cap it documents,
+so the parse has to tee rather than replace; and Gradle interleaves its progress
+lines with compiler output, so the matcher needs to be anchored, not greedy.
+
+A near relative worth taking at the same time: SpaceVim bundles `vim-unstack`,
+which turns a pasted Java stack trace into jumpable locations. For Spring work
+that is the same gap from the other end — a failing test prints a trace into the
+terminal and there is no way to jump into it. `nvim-jdtls` already parses JUnit
+traces for `test_nearest_method` (`lua/jdtls/junit.lua`), but only for tests it
+launched itself; a `gradlew test` run gets nothing.
+
+## 9. jdtls `source.generate.*` — SpaceVim's `SPC l g` "Generate" group
+
+**Adopted** (`lua/config/java_source.lua`, nine keys under `<leader>jg` in
+`ftplugin/java.lua`). It was not the cheapest item after all — the accessors
+caveat below turned out to need a whole LSP command handler:
+
+* **`java.action.generateAccessorsPrompt` has no handler in nvim-jdtls**, so
+  Neovim fell back to sending it to the server as `workspace/executeCommand`,
+  which jdtls does not implement for the `*Prompt` commands — they exist
+  precisely to hand control back to the client. Getters/setters, the most-wanted
+  generator, silently did nothing. `M.setup` registers the missing handler,
+  built from the two requests vscode-java uses
+  (`java/resolveUnimplementedAccessors` → `AccessorField[]`, then
+  `java/generateAccessors` → `WorkspaceEdit`), with the shapes read out of the
+  jar rather than copied from vscode-java's TypeScript.
+* **No capability change is needed.** `ClientPreferences.isSupportedCodeActionKind`
+  is a `startsWith` against the client's `codeActionKind` valueSet, which
+  `vim.lsp.protocol.make_client_capabilities()` already fills with `source`.
+* **`source.generate.finalModifiers` and `source.sortMembers` look like dead
+  keys and are not.** Against a running jdtls they answer with *no action at all*
+  in a class with nothing to do, at every cursor position and selection — because
+  `CompilationUnitSorter.sort` returns null when sorting would change nothing,
+  and Eclipse's comparator orders by *category* (fields, constructors, methods)
+  rather than alphabetically, so `void b()` above `void a()` is already sorted.
+  Both appear as soon as the file needs them. Neovim itself notifies "No code
+  actions available" in the empty case, so nothing here reports it.
+
+All nine kinds were checked against a real jdtls 1.60.0 on a Spring Boot project,
+not just against the jar, and `<leader>jga` was confirmed to generate four real
+accessors and reach disk.
+
+The original case for it:
+
+SpaceVim's Java layer has a whole `SPC l g` group — generate constructor, default
+constructor, `toString`, `equals`/`hashCode`, getters, setters, abstract methods
+(`autoload/SpaceVim/layers/lang/java.vim`). It drives it through
+`vim-javacomplete2`, which is obsolete. But **jdtls implements all of it**, and
+this config binds exactly one of them.
+
+Read out of the installed `org.eclipse.jdt.ls.core_1.60.0` rather than taken from
+docs — the source action kinds present in the jar are:
+
+```
+source.generate.accessors        source.generate.hashCodeEquals
+source.generate.constructors     source.generate.toString
+source.generate.delegateMethods  source.overrideMethods
+source.generate.finalModifiers   source.sortMembers
+source.organizeImports     ← the only one ftplugin/java.lua binds (<F9>)
+```
+
+Each is reachable with no plugin at all:
+
+```lua
+vim.lsp.buf.code_action({ context = { only = { "source.generate.toString" } }, apply = true })
+```
+
+Today these are only reachable by opening `<leader>ca` and reading a list, which
+is why they go unused.
+
+**The caveat, verified:** jdtls answers these with a `java.action.*Prompt`
+command that the client has to handle, and `nvim-jdtls` registers handlers for
+five of the six — `generateToStringPrompt`, `hashCodeEqualsPrompt`,
+`generateConstructorsPrompt`, `generateDelegateMethodsPrompt`,
+`overrideMethodsPrompt` (`lua/jdtls.lua:801-809`). There is **no**
+`generateAccessorsPrompt` handler; grepping the whole plugin for "accessor" finds
+only an unrelated stack-trace pattern. So getters/setters — the one a Java
+developer reaches for most — is the one that needs a handler written here, or
+omitting. Worth knowing before the group gets bound as if it were six for one.
+
+## 10. Alternate file: class ↔ test — SpaceVim's `a.vim`
+
+**Adopted** (`lua/config/alternate.lua`, `<leader>fa` and `:A`). The one thing
+worth recording is the key, because it cost a debug run: this was `<M-o>`
+("other file") first, and **neotest already owns `<M-o>`** through a lazy `keys`
+spec (`lua/plugins/testing.lua`). A lazy `keys` entry creates its stub mapping
+when `lazy.setup` runs — *after* `init.lua` has sourced `lua/config/keymaps.lua`
+— so the collision silently replaced the mapping with no warning: the key
+registered, reported neotest's `desc`, and opened neotest's output panel.
+`tests/unit/plugin_specs_spec.lua` now fails on that whole class of collision
+rather than leaving it to be noticed.
+
+IntelliJ's own `Ctrl+Shift+T` was rejected up front for a different reason:
+Ghostty and most terminal emulators bind it to "new tab" and never forward it.
+
+The original case for it:
+
+SpaceVim ships `:A`, driven by a `.project_alt.json` of glob
+patterns with a `{}` capture (`autoload/SpaceVim/plugins/a.vim`), so `:A` jumps
+`src/foo.c` ↔ `include/foo.h` and `:A doc` goes somewhere else again.
+
+This config has `neotest` to *run* a test and `telescope` to *find* a file by
+name, but no "take me to this class's test" — which in a Maven/Gradle layout is a
+pure path transform:
+
+```
+src/main/java/com/example/demo/Foo.java  ↔  src/test/java/com/example/demo/FooTest.java
+foo.component.ts                          ↔  foo.component.html / .scss
+foo.ts                                    ↔  foo.spec.ts
+```
+
+~40 lines in a `lua/config/alternate.lua`, no plugin, and the Angular triple is
+worth more here than the Java pair: component/template/styles is a three-way jump
+that happens constantly and currently needs the file tree. SpaceVim's generalised
+JSON config is more than is needed — the three transforms above are the config's
+actual stack, and a per-project JSON file nobody writes is the usual fate of that
+feature.
+
+## 11. `Trouble symbols` — SpaceVim's `tagbar`, with a plugin already installed
+
+**Adopted**, and it did cost exactly one keymap: `<leader>lo` →
+`Trouble symbols toggle focus=false win.position=right`, in `lua/plugins/lsp.lua`'s
+`on_attach` and gated on the server advertising `textDocument/documentSymbol`
+(the same gate as `<leader>ls`), so it is not bound in a buffer where it could
+only fail. Verified against a real jdtls: the outline lists the file's symbols,
+opens at column 170 of 200 (the right-hand side), and leaves the cursor in the
+code.
+
+The original case for it:
+
+SpaceVim's `tagbar` is a persistent
+symbol outline. This config has no outline panel — only
+`<leader>ls` → `Telescope lsp_document_symbols`, a transient picker, and
+`barbecue`/`navic`, which show the path to the cursor rather than the file's
+shape. Navigating a 400-line Spring `@RestController` means scrolling.
+
+`folke/trouble.nvim` is already installed here and already `cmd`-triggered, and
+`symbols` (`mode = "lsp_document_symbols"`) is one of its built-in modes
+(`lua/trouble/config/init.lua:132`). So this is `<leader>o` →
+`Trouble symbols toggle focus=false win.position=right` and nothing else —
+no new plugin, no startup cost, the trigger it already has. `Trouble lsp` gives a
+references/implementations sidebar on the same terms.
+
+## 12. Task picker with auto-detection — SpaceVim's task providers
+
+**Adopted** (`lua/config/tasks.lua`, `<leader>rt`), and the performance condition
+below was the design. Gradle discovery runs `tasks --all --console=plain -q`
+asynchronously, caches the result on disk under `stdpath("cache")` keyed on a
+stamp over `build.gradle`/`settings.gradle`, and is guarded against a second
+in-flight run, so three presses start one daemon rather than three. Until the
+cache fills, the picker shows a curated list immediately instead of blocking.
+Maven's phases are a fixed list and need no discovery; npm reads `package.json`.
+
+Two details found while building it: a subproject task is printed as either
+`api:build` or `:api:build` depending on the Gradle version and where the report
+was run from, and both are valid to pass back — so the parser accepts a leading
+colon. And the picker deliberately does *not* register its runs in the runner's
+`jobs` table: a task is a one-shot build, not the long-lived process the
+Run/Stop/Restart toolbar owns.
+
+The original case for it:
+
+SpaceVim's task manager takes
+*providers*: functions that return discovered tasks. It ships one for npm — parse
+`package.json`, turn every entry in `scripts` into a task named `npm:<script>` —
+and documents registering more (its example is a `make` provider reading
+`Makefile` targets).
+
+`lua/config/runner.lua` already does the harder half of this well: it walks up for
+`pom.xml`/`build.gradle`/`package.json`, prefers `mvnw`/`gradlew` over the system
+tool, reads the lockfile to pick npm/pnpm/yarn, and detects Spring Boot. What it
+deliberately does not do is *enumerate*: it resolves **one** run target and one
+debug target, so `npm run build`, `npm run lint`, `gradlew test`,
+`mvn dependency:tree` are all unreachable without typing them into a terminal.
+
+The addition is a picker over `config.runner`'s existing detection — every script
+in `package.json`, the Maven lifecycle phases, the Gradle tasks — handing the
+chosen command to `runner.run_in_terminal`, which already exists. It pairs with #8:
+a task that fails should leave a quickfix list.
+
+**The condition** (standing snappiness priority): npm scripts are a file read and
+free, but Gradle task discovery means `gradlew tasks --all`, which spins up the
+daemon and takes seconds. That has to be cached on disk keyed by `build.gradle`'s
+mtime and populated asynchronously, or the picker becomes the slowest key in the
+config. Maven's phases are a fixed list and need no discovery at all.
+
+## 13. `mbbill/undotree` — SpaceVim's `vim-mundo` slot
+
+**Adopted** (`lua/plugins/editor.lua`, `<leader>uu`), and it was as small as
+advertised. One non-obvious thing: the `g:undotree_*` options go in the spec's
+`init`, not its `config`. It is a vimscript plugin and `plugin/undotree.vim`
+reads every one of them at source time — lazy sources `plugin/` files *before*
+calling `config`, so a `config` function would set them one step too late and
+they would be silently ignored. Layout 2 (tree left, diff beneath it) rather
+than the default, which splits the diff off the *editing* area and rearranges
+the code you are comparing against while you read it.
+
+The original case for it:
+
+`lua/config/options.lua` already sets
+`undofile = true` with an `undodir`, so this config persists full undo history
+across sessions and then offers no way to look at it — `u`/`<C-r>` walk one
+branch of a tree. SpaceVim carries `vim-mundo`/`undotree` for exactly this.
+`cmd = "UndotreeToggle"` means it costs nothing until used.
+
+## From SpaceVim, considered and declined
+
+- **`andymass/vim-matchup`.** SpaceVim bundles it for `%` on `if`/`end` and
+  HTML tags. Checked: Neovim ships matchit enabled by default — `vim.g.loaded_matchit`
+  is `1` in this config with no configuration — so `%` already does the keyword
+  and tag jumps. What matchup adds beyond that is *highlighting* the match, which
+  runs on `CursorMoved` for every buffer. That is the same cost profile as the
+  inlay-hint and illuminate work already tuned here, bought for a cosmetic.
+
+- **Window numbers in the statusline + `SPC 1`…`SPC 9` to jump** (SpaceVim's
+  signature window model, with `vim-choosewin`). `lua/config/keymaps.lua` binds
+  `<C-h/j/k/l>` to directional window moves. SpaceVim needs numbers *because* it
+  leaves directional navigation to raw `<C-w>`; with the directional maps there is
+  nothing left for a number to reach faster, and it would mean a statusline
+  segment on every redraw.
+
+- **`FlyGrep` / `denite` / `unite` / `ctrlp` / `LeaderF`** — five fuzzy finders
+  across the bundle, all predating `telescope` + `telescope-fzf-native`, both
+  installed here. `grug-far` covers the project-wide replace that FlyGrep does not.
+
+- **`iedit` mode** (SpaceVim's own simultaneous-editing implementation) —
+  `mg979/vim-visual-multi` is installed and does more.
+
+- **`ale` / `neomake`** — external linter frameworks from before LSP. Diagnostics
+  come from the servers and `conform` here.
+
+- **`pmd.vim`** — PMD static analysis for Java. A real tool, but it is a linter
+  *choice*, not a config idea: it would be an `nvim-lint` entry plus a mason
+  package, and jdtls already surfaces ECJ's warnings inline. Separate proposal.
+
+- **`repl.vim` + `SPC l s` send-to-REPL** (jshell for Java) — marginal for Spring
+  work, where the unit of iteration is a test or a `bootRun` restart, both of
+  which the toolbar already has.
+
+- **The layer system itself** (`.SpaceVim.d/init.toml`, `SpaceVim#layers#load`) —
+  enable/disable feature groups by name. The equivalent here is lazy.nvim's spec
+  files plus their load triggers, which is the same idea with per-plugin
+  granularity and a lazy-loading story SpaceVim does not have.
 
 ## Measured and rejected
 

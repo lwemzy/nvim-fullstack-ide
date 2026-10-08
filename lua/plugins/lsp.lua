@@ -243,6 +243,20 @@ return {
           "textDocument/documentSymbol", "Document symbols")
         gate("n", "<leader>lw", "<cmd>Telescope lsp_dynamic_workspace_symbols<CR>",
           "workspace/symbol", "Workspace symbols")
+        -- The sidebar counterpart to <leader>ls, not a duplicate of it: a picker
+        -- answers "jump to the symbol I can already name", an outline answers
+        -- "what is in this file" — the question you have when you open a 900-line
+        -- class you did not write. No new plugin for it; trouble.nvim is already
+        -- here for <M-x> and ships a `symbols` mode (lsp_document_symbols).
+        --
+        -- focus=false so it opens beside the code and leaves the cursor in it,
+        -- which is what makes it usable as a map rather than a destination.
+        -- Gated on the same method as <leader>ls because trouble issues
+        -- textDocument/documentSymbol itself and renders an empty pane when
+        -- nothing answers — a mapping that opens a blank window is worse than one
+        -- that is honestly absent.
+        gate("n", "<leader>lo", "<cmd>Trouble symbols toggle focus=false win.position=right<CR>",
+          "textDocument/documentSymbol", "Outline (symbols sidebar)")
         -- Call hierarchy (who calls this / what does this call), quickfix-based
         -- since Telescope has no built-in call-hierarchy picker to route through.
         gate("n", "<leader>lc", vim.lsp.buf.incoming_calls,

@@ -192,6 +192,43 @@ describe("lua/plugins specs", function()
       end
     end)
 
+    it("declares no lhs that lua/config/keymaps.lua already owns", function()
+      -- The collision that is invisible at runtime and cost a debug session to
+      -- find: init.lua sources config/keymaps.lua, and lazy.setup creates its
+      -- `keys` stub mappings *afterwards*, so a plugin keys entry with the same
+      -- lhs silently replaces the config's own mapping. <M-o> was bound to the
+      -- counterpart-file jump here and to neotest's output panel there, and only
+      -- neotest's ever fired — the key registered, had neotest's desc, and did
+      -- the wrong thing.
+      --
+      -- keymaps.lua is read as text rather than sourced: its map() calls run
+      -- unconditionally, so the lhs list is right there, and sourcing it would
+      -- need every plugin module it closes over.
+      local text = read_text(vim.fn.fnamemodify(S.plugins_dir, ":h") .. "/config/keymaps.lua")
+      local owned = {}
+      local function own(modes, lhs)
+        for mode in modes:gmatch("%a") do
+          owned[mode .. " " .. lhs] = true
+        end
+      end
+      -- map("n", "<lhs>", …) and map({ "n", "x" }, "<lhs>", …) — the only two
+      -- shapes in that file.
+      for modes, lhs in text:gmatch('map%(%s*"(%a+)"%s*,%s*"([^"]+)"') do
+        own(modes, lhs)
+      end
+      for modes, lhs in text:gmatch('map%(%s*{([^}]*)}%s*,%s*"([^"]+)"') do
+        own(modes:gsub('"', ""), lhs)
+      end
+      assert.is_true(vim.tbl_count(owned) > 20, "keymaps.lua parsed to " .. vim.tbl_count(owned) .. " mappings")
+
+      for _, k in ipairs(S.keys()) do
+        for _, mode in ipairs(k.modes) do
+          assert.is_nil(owned[mode .. " " .. k.lhs],
+            ("%s collides with the same lhs in lua/config/keymaps.lua"):format(describe_key(k)))
+        end
+      end
+    end)
+
     it("uses no Mac Cmd (<D-...>) lhs", function()
       -- Project rule: this branch is the Windows/Linux config and its shortcuts
       -- are Ctrl-based; Mac Cmd bindings live on a separate branch. A <D-...>

@@ -324,6 +324,44 @@ return {
     },
   },
 
+  -- Undo history as a tree
+  --
+  -- Neovim's undo is already a tree, not a stack: `u` past a branch point and
+  -- then typing creates a new branch, and the old one is still reachable — but
+  -- only through `g-`/`g+` and `:undolist`, which show a flat list of sequence
+  -- numbers with no indication of where the branches are. The usual outcome is
+  -- that the work on the abandoned branch is treated as lost. options.lua already
+  -- sets `undofile`, so that history survives across sessions too and this reads
+  -- it.
+  {
+    "mbbill/undotree",
+    cmd = { "UndotreeToggle", "UndotreeShow", "UndotreeFocus" },
+    -- init, not config: this is a vimscript plugin, and plugin/undotree.vim reads
+    -- every g:undotree_* at source time (its s:defineOption only fills in
+    -- defaults for names that are already unset). lazy sources plugin/ files
+    -- *before* calling config, so a config function would set these one step too
+    -- late and they would be ignored.
+    init = function()
+      -- Layout 2: the tree on the left, the diff of the selected state underneath
+      -- it, full height. The default (layout 1) puts the diff in a window split
+      -- off the *editing* area, which rearranges the code you are comparing
+      -- against while you read it.
+      vim.g.undotree_WindowLayout = 2
+      vim.g.undotree_SplitWidth = 34
+      vim.g.undotree_DiffpanelHeight = 12
+      -- The panel is read by moving through it, so starting outside it means every
+      -- use begins with a window jump.
+      vim.g.undotree_SetFocusWhenToggle = 1
+      vim.g.undotree_ShortIndicators = 1
+    end,
+    keys = {
+      -- Under the leader+u "ui toggles" group (leader+uf format-on-save,
+      -- leader+uh inlay hints) rather than its own chord: this is a panel that
+      -- toggles, which is exactly what that group is.
+      { "<leader>uu", "<cmd>UndotreeToggle<CR>", desc = "Toggle undo tree" },
+    },
+  },
+
   -- Smooth scrolling
   {
     "karb94/neoscroll.nvim",

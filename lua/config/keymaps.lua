@@ -107,6 +107,17 @@ map("n", "]d", function() vim.diagnostic.jump({ count = 1,  float = true }) end,
 map("n", "[d", function() vim.diagnostic.jump({ count = -1, float = true }) end, { desc = "Prev diagnostic" })
 map("n", "<M-e>", vim.diagnostic.open_float,            { desc = "Show diagnostic detail" })
 map("n", "<M-x>", "<cmd>Trouble diagnostics toggle<CR>",{ desc = "Diagnostics list" })
+-- Build problems, which are a different list from diagnostics above and arrive
+-- from a different place: diagnostics come from the language server's view of the
+-- open file, this is what the *build* said (lua/config/problems.lua parses the
+-- run terminal's output into quickfix on exit). The two disagree often enough to
+-- matter — jdtls compiles with its own classpath, so an annotation processor or a
+-- Gradle sourceSet it does not model produces errors that only the build sees.
+--
+-- Through Trouble rather than :copen for the same reason <M-x> is: the same
+-- window, the same keys, and a preview. `]q`/`[q` walk the list without opening
+-- anything and are Neovim 0.11 defaults, so there is nothing to bind for those.
+map("n", "<M-q>", "<cmd>Trouble qflist toggle<CR>",     { desc = "Build problems (quickfix)" })
 
 -- ── Debug (F5-F11) ─────────────────────────────────────────────────────────
 -- Adapters configured in plugins/debug.lua
@@ -134,6 +145,39 @@ map("n", "<leader>rR", run("restart"), { desc = "Restart project" })
 map("n", "<leader>rs", run("stop"),    { desc = "Stop project" })
 map("n", "<leader>rd", run("debug"),   { desc = "Debug project (attaches automatically)" })
 map("n", "<leader>ra", run("attach"),  { desc = "Attach debugger to a running process" })
+-- Everything the project can build that is not "start the app": test, lint,
+-- clean, dependency:tree, any npm script. Same group because it is the same
+-- detection — lua/config/tasks.lua is a picker over config.runner's target, not a
+-- second guess at which project this is.
+map("n", "<leader>rt", function() require("config.tasks").pick() end,
+  { desc = "Run a build task (test, lint, clean, …)" })
+
+-- ── Counterpart file (class ↔ test, component ↔ template) ─────────────────
+-- lua/config/alternate.lua works out the path from the project layout; this is
+-- just the trigger, and it requires the module lazily so nothing is parsed at
+-- startup for a key that may not be pressed.
+--
+-- Under the existing leader+f "find / format" group rather than on an Alt chord,
+-- and the reason is worth recording because it cost a debug run to find: this was
+-- <M-o> ("other file") first, and every Alt letter that reads as "alternate",
+-- "other" or "test" is already taken by neotest's lazy `keys` spec
+-- (lua/plugins/testing.lua binds <M-t>, <M-T> and <M-o>). A lazy keys entry
+-- creates its stub mapping when lazy.setup runs, i.e. *after* init.lua has
+-- sourced this file — so the collision silently replaced the mapping here and
+-- <M-o> opened neotest's output panel instead. tests/unit/plugin_specs_spec.lua
+-- now fails on that class of collision rather than leaving it to be noticed.
+--
+-- IntelliJ's own Ctrl+Shift+T was rejected up front for a different reason:
+-- Ghostty and most other terminal emulators bind it to "new tab" and never
+-- forward it, so the mapping would register in Neovim and still do nothing.
+--
+-- :A as well, after a.vim's command, because it is what the muscle memory of
+-- anyone who has used that plugin reaches for.
+local alternate = function() require("config.alternate").toggle() end
+map("n", "<leader>fa", alternate, { desc = "Open counterpart file (test / template)" })
+vim.api.nvim_create_user_command("A", alternate, {
+  desc = "Open the counterpart of this file (class <-> test, component <-> template)",
+})
 
 -- ── LSP navigation (standard vim keys — kept universal) ───────────────────
 -- gd  = definition     (also F12 above)
