@@ -402,7 +402,7 @@ ones that fail if they come back.
   matched nothing and the walk ran to `/` again. Every path now goes through one
   `resolve()`. — `project_spec`, `conform_spec`
 - The prettier check read only the *nearest* `package.json`, so a monorepo
-  workspace package got the Google fallback while the repo root's `"prettier"`
+  workspace package got the house fallback while the repo root's `"prettier"`
   key (and CI) said otherwise. — `conform_spec`
 
 ### Found by running the config on a second machine (Linux), fixed here

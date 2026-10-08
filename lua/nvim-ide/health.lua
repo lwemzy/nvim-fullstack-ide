@@ -190,10 +190,10 @@ local function formatters()
   health.start("Formatters")
 
   -- conform's JS/TS selection needs BOTH: prettierd for speed, and plain
-  -- prettier because the daemon rejects the ad-hoc --single-quote that carries
-  -- the Google-style fallback (see lua/plugins/editor.lua). With only prettierd
+  -- prettier because the daemon rejects the ad-hoc CLI flags that carry the
+  -- house-style fallback (see lua/plugins/editor.lua). With only prettierd
   -- installed, every JS/TS file with no project prettier config formats with
-  -- Prettier's stock double quotes instead.
+  -- Prettier's stock double quotes and 80-column wrap instead.
   for _, name in ipairs({ "prettierd", "prettier" }) do
     if vim.fn.executable(name) == 1 or vim.fn.executable(mason("bin/" .. name)) == 1 then
       health.ok(name .. " available")

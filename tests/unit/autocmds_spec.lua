@@ -32,6 +32,7 @@ local EXPECTED = {
   highlight_yank         = { TextYankPost = 1 },
   restore_cursor         = { BufReadPost = 1 },
   java_settings          = { FileType = 1 },
+  js_ts_settings         = { FileType = 4 },
   close_with_q           = { FileType = 5 },
   bigfile_detect         = { BufReadPre = 1 },
   bigfile_limit          = { BufReadPost = 1 },
@@ -230,6 +231,42 @@ describe("config.autocmds", function()
       -- relative to what format-on-save actually produces.
       assert.equals("100", vim.wo.colorcolumn)
     end)
+  end)
+
+  describe("js_ts_settings", function()
+    before_each(function()
+      load_autocmds()
+      H.disable_autosave()
+    end)
+
+    it("registers for all four JS/TS filetypes", function()
+      -- All four, not just typescript: miss one and that filetype silently keeps
+      -- the global 4-wide hard tabs while conform formats it to 2 spaces.
+      local patterns = vim.tbl_map(function(a) return a.pattern end,
+        H.autocmds({ group = "js_ts_settings" }))
+      table.sort(patterns)
+      assert.same({ "javascript", "javascriptreact", "typescript", "typescriptreact" }, patterns)
+    end)
+
+    for _, ft in ipairs({ "javascript", "javascriptreact", "typescript", "typescriptreact" }) do
+      it("applies 2-space soft tabs and a 120-column guide on FileType " .. ft, function()
+        -- vim.opt_local resolves against the *current* buffer/window, so the
+        -- buffer must already be current when FileType fires, as it is in real use.
+        local buf = H.scratch({ name = H.tmpdir("jsts") .. "/index.ts" })
+        H.stub(vim.wo, "colorcolumn", vim.wo.colorcolumn)
+        vim.bo[buf].filetype = ft
+
+        -- expandtab is the load-bearing one: lua/config/options.lua sets
+        -- expandtab = false globally for Java's sake, and prettier emits spaces.
+        -- Without the override, typing and formatting disagree on every line.
+        assert.is_true(vim.bo[buf].expandtab)
+        assert.equals(2, vim.bo[buf].tabstop)
+        assert.equals(2, vim.bo[buf].shiftwidth)
+        -- 120, matching --print-width=120 in prettier_house. A different number
+        -- here draws the guide where the formatter does not wrap.
+        assert.equals("120", vim.wo.colorcolumn)
+      end)
+    end
   end)
 
   describe("close_with_q", function()

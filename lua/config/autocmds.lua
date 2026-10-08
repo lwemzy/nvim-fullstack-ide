@@ -44,6 +44,27 @@ autocmd("FileType", {
   end,
 })
 
+-- JS/TS: 2-space soft tabs and a 120-column guide, matching what this IDE
+-- formats them to (prettier_house in lua/plugins/editor.lua, and Prettier's own
+-- defaults in any project that brings its own config — prettier writes spaces
+-- unless a project asks for tabs). Without this they inherit the global 4-wide
+-- hard tabs from lua/config/options.lua, so every line typed by hand got
+-- re-indented the moment format-on-save ran, and the colorcolumn sat at the
+-- wrong width. Separate from yaml_spaces above rather than folded into it: the
+-- two share an indent width by coincidence, and only this one has a wrap column.
+autocmd("FileType", {
+  group = augroup("js_ts_settings", { clear = true }),
+  pattern = { "javascript", "javascriptreact", "typescript", "typescriptreact" },
+  callback = function()
+    vim.opt_local.expandtab = true
+    vim.opt_local.tabstop = 2
+    vim.opt_local.shiftwidth = 2
+    -- 120, the max-len the work configs set. Prettier's stock default is 80, so
+    -- a project with its own config may well wrap narrower than this guide.
+    vim.opt_local.colorcolumn = "120"
+  end,
+})
+
 -- Close certain filetypes with just 'q'
 autocmd("FileType", {
   group = augroup("close_with_q", { clear = true }),

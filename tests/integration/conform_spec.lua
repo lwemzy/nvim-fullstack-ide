@@ -3,9 +3,9 @@
 -- The interesting part of that config is one function: `prettier_or_none`, which
 -- decides per-buffer whether a JS/TS project has an opinion of its own about
 -- formatting. If it says "yes" wrongly, this IDE silently overrides a project's
--- own prettier config with Google's style and every save produces a diff the
--- project's CI rejects. If it says "no" wrongly, the Google fallback never
--- applies and double quotes come back.
+-- own prettier config with the house style and every save produces a diff the
+-- project's CI rejects. If it says "no" wrongly, the house fallback never
+-- applies and prettier's stock double quotes and 80-column wrap come back.
 --
 -- No LSP client is started anywhere in here, deliberately. formatters_by_ft
 -- entries for JS/TS ARE that function, so `formatters_by_ft.typescript(bufnr)`
@@ -20,8 +20,8 @@ local H = require("helpers")
 --- prettierd first (it is the daemon, so it is the fast path) with plain
 --- prettier as the fallback, and stop_after_first so only one of them runs.
 local PROJECT_PRETTIER = { "prettierd", "prettier", stop_after_first = true }
---- ...and when it does not: the Google-style wrapper defined in the same config.
-local GOOGLE_FALLBACK = { "prettier_google", stop_after_first = true }
+--- ...and when it does not: the house-style wrapper defined in the same config.
+local HOUSE_FALLBACK = { "prettier_house", stop_after_first = true }
 
 describe("conform formatter selection", function()
   local conform
@@ -60,17 +60,17 @@ describe("conform formatter selection", function()
       assert.same(PROJECT_PRETTIER, selection_in("prettier-pkgjson"))
     end)
 
-    it("falls back to prettier_google when the project has no opinion", function()
+    it("falls back to prettier_house when the project has no opinion", function()
       -- package.json present but with no "prettier" key: the decision must key
       -- off the key, not off the file's existence, or this branch is dead code.
-      assert.same(GOOGLE_FALLBACK, selection_in("prettier-none"))
+      assert.same(HOUSE_FALLBACK, selection_in("prettier-none"))
     end)
 
     it("ignores a prettier config above the project's VCS root", function()
       -- The whole-machine failure the search bound exists for. `.prettierrc` and
       -- a package.json with a "prettier" key are dotfile-shaped things people
       -- keep in $HOME; an unbounded upward walk found them from any project and
-      -- disabled the Google fallback everywhere, with nothing on screen to say
+      -- disabled the house fallback everywhere, with nothing on screen to say
       -- why. The fixture's own .git makes its parent the ceiling, and $HOME's
       -- role in the real bug is what that parent stands in for here.
       -- Built by hand rather than with H.fixture: the parent has to hold the
@@ -84,7 +84,7 @@ describe("conform formatter selection", function()
       H.write(above .. "/package.json", { '{ "prettier": { "singleQuote": false } }' })
 
       local bufnr = named_buffer(dir .. "/src/index.ts")
-      assert.same(GOOGLE_FALLBACK, conform.formatters_by_ft.typescript(bufnr))
+      assert.same(HOUSE_FALLBACK, conform.formatters_by_ft.typescript(bufnr))
       -- Both really are one directory up, so the result cannot be an artefact of
       -- a fixture that failed to write them.
       assert.equals(1, vim.fn.filereadable(above .. "/.prettierrc"))
@@ -117,16 +117,16 @@ describe("conform formatter selection", function()
       assert.same(PROJECT_PRETTIER, conform.formatters_by_ft.typescript(bufnr))
     end)
 
-    it("never returns both prettier and the Google wrapper", function()
+    it("never returns both prettier and the house wrapper", function()
       -- stop_after_first makes conform run one formatter, but the two branches
-      -- must also be mutually exclusive by name: prettier_google appends
+      -- must also be mutually exclusive by name: prettier_house appends
       -- --single-quote, so running it *after* a project's own prettier would
       -- re-quote a project that explicitly chose double quotes.
       for _, fixture in ipairs({ "prettier-configured", "prettier-pkgjson", "prettier-none" }) do
         local names = selection_in(fixture)
         local set = {}
         for _, n in ipairs(names) do set[n] = true end
-        assert.is_true(set.prettier_google == nil or set.prettier == nil)
+        assert.is_true(set.prettier_house == nil or set.prettier == nil)
         assert.is_true(names.stop_after_first)
       end
     end)
@@ -173,18 +173,18 @@ describe("conform formatter selection", function()
     end)
   end)
 
-  describe("prettier_google", function()
+  describe("prettier_house", function()
     --- The formatter table conform itself would resolve, plus the ctx conform
     --- itself would build. Reusing conform's own resolution rather than reading
-    --- require("conform").formatters directly is the point: prettier_google
+    --- require("conform").formatters directly is the point: prettier_house
     --- inherits from the built-in prettier config, and only get_formatter_config
     --- applies that inheritance.
     local function resolve(bufnr)
-      local config = assert(conform.get_formatter_config("prettier_google", bufnr))
+      local config = assert(conform.get_formatter_config("prettier_house", bufnr))
       return config, require("conform.runner").build_context(bufnr, config)
     end
 
-    it("adds --single-quote and tab indentation on top of the built-in prettier args", function()
+    it("adds the five house-style flags on top of the built-in prettier args", function()
       local dir = H.fixture("prettier-none")
       local buf = named_buffer(dir .. "/src/index.ts")
       local config, ctx = resolve(buf)
@@ -192,11 +192,20 @@ describe("conform formatter selection", function()
 
       -- --stdin-filepath must survive: prettier infers its parser from that
       -- path, and dropping it makes prettier fail on every buffer.
-      assert.same({ "--stdin-filepath", "$FILENAME", "--single-quote", "--use-tabs", "--tab-width=4" }, args)
-      -- Differences from prettier's stock defaults: single quotes (both Google
-      -- style guides) and 4-wide hard tabs, matching the editor's own indent
-      -- settings so format-on-save doesn't turn tabs back into spaces. Only
-      -- reached when the project has no prettier config of its own.
+      --
+      -- The five flags are the house style's ESLint rules, one for one:
+      -- quotes/single, indent/2, max-len/120, comma-dangle/never,
+      -- arrow-parens/as-needed. Pinned here as a list because every one of them
+      -- differs from a prettier default *or* from what this formatter used to
+      -- pass (it was --use-tabs --tab-width=4), and a dropped flag is invisible
+      -- at the time of the save.
+      assert.same({
+        "--stdin-filepath", "$FILENAME",
+        "--single-quote", "--tab-width=2", "--print-width=120",
+        "--trailing-comma=none", "--arrow-parens=avoid",
+      }, args)
+      -- Only reached when the project has no prettier config of its own; the
+      -- built-in it wraps carries none of this.
       local base = require("conform.formatters.prettier")
       assert.same({ "--stdin-filepath", "$FILENAME" }, base.args(base, ctx))
     end)
@@ -209,9 +218,9 @@ describe("conform formatter selection", function()
       if type(command) == "function" then command = command(config, ctx) end
 
       -- This is the entire reason the fallback exists as a separate formatter:
-      -- prettierd is a daemon and ignores ad-hoc CLI overrides, so
-      -- --single-quote passed to prettierd would be silently dropped and the
-      -- Google style would never be applied.
+      -- prettierd is a daemon and ignores ad-hoc CLI overrides, so all five
+      -- flags passed to prettierd would be silently dropped and the house style
+      -- would never be applied.
       assert.is_truthy(command:match("prettier$"), "command is " .. tostring(command))
       assert.is_nil(command:match("prettierd"))
       -- mason installs prettier outside the system PATH. The fix is on the
@@ -228,27 +237,66 @@ describe("conform formatter selection", function()
       -- conform silently skips an unavailable formatter, so a fallback that
       -- resolves correctly but is not installed still leaves JS/TS unformatted.
       -- mason-tool-installer lists plain `prettier` for exactly this reason.
-      local info = conform.get_formatter_info("prettier_google", named_buffer(H.tmpdir("pg") .. "/x.ts"))
+      local info = conform.get_formatter_info("prettier_house", named_buffer(H.tmpdir("ph") .. "/x.ts"))
       if not info.available then
         return H.skip("prettier not installed (" .. tostring(info.available_msg) .. ")")
       end
       assert.is_true(info.available)
     end)
 
-    it("really rewrites double quotes to single quotes", function()
-      local info = conform.get_formatter_info("prettier_google")
+    it("really produces the house style, not prettier's defaults", function()
+      local info = conform.get_formatter_info("prettier_house")
       if not info.available then return H.skip("prettier not installed; cannot run end to end") end
 
       -- A buffer with a .ts name but no filetype: prettier picks its parser
       -- from --stdin-filepath, so the name is enough, and leaving filetype
       -- unset keeps ts_ls/angularls out of an assertion about a CLI flag.
-      local path = H.tmpdir("pg-e2e") .. "/quotes.ts"
-      local buf = H.scratch({ name = path, lines = { 'const greeting = "hi"' } })
-      conform.format({ bufnr = buf, formatters = { "prettier_google" }, async = false, timeout_ms = 15000 })
+      --
+      -- Observed on real output rather than on the argv, because each flag can
+      -- be present and still not reach the file: prettierd would swallow all
+      -- five, and a flag prettier no longer recognises is a hard exit that
+      -- conform reports as "formatter failed" with the buffer untouched.
+      local path = H.tmpdir("ph-e2e") .. "/style.ts"
+      local buf = H.scratch({ name = path, lines = {
+        'const greeting = "hi"',
+        "const obj = {",
+        '        name: "a",',
+        "        value: 1,",
+        "}",
+        "const fn = (x) => x + 1",
+        -- 107 columns once formatted: over prettier's stock 80, under 120, so
+        -- it stays on one line only if --print-width actually arrived.
+        "const longCall = someFunction('aaaaaaaaaa', 'bbbbbbbbbb', 'cccccccccc', 'dddddddddd', 'eeeeeeeeee', 12345)",
+      } })
+      conform.format({ bufnr = buf, formatters = { "prettier_house" }, async = false, timeout_ms = 15000 })
 
-      -- The whole point of the fallback, observed on real output rather than on
-      -- the argv: prettier's own default is double quotes.
-      assert.same({ "const greeting = 'hi';" }, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+      assert.same({
+        "const greeting = 'hi';", -- --single-quote (prettier defaults to double)
+        "const obj = {",
+        "  name: 'a',", -- --tab-width=2, and object-curly-spacing is already prettier's default
+        "  value: 1", -- --trailing-comma=none (prettier 3 defaults to "all")
+        "};",
+        "const fn = x => x + 1;", -- --arrow-parens=avoid (prettier defaults to "always")
+        "const longCall = someFunction('aaaaaaaaaa', 'bbbbbbbbbb', 'cccccccccc', 'dddddddddd', 'eeeeeeeeee', 12345);",
+      }, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+    end)
+
+    it("cannot satisfy space-before-function-paren, and that is known", function()
+      local info = conform.get_formatter_info("prettier_house")
+      if not info.available then return H.skip("prettier not installed; cannot run end to end") end
+
+      -- The one house rule with no prettier flag, pinned so it stays a recorded
+      -- limitation rather than turning into a bug report. `eslint --fix` is what
+      -- closes the gap, and it is the work repo's only enforcement path anyway.
+      local path = H.tmpdir("ph-gap") .. "/async.ts"
+      local buf = H.scratch({ name = path, lines = { "const put = async (item, ctx) => item;" } })
+      conform.format({ bufnr = buf, formatters = { "prettier_house" }, async = false, timeout_ms = 15000 })
+
+      -- Two parameters, so --arrow-parens=avoid cannot drop the parens and the
+      -- space in front of them survives. With one parameter it would read
+      -- `async item => item;` and the rule would be satisfied by accident.
+      assert.same({ "const put = async (item, ctx) => item;" },
+        vim.api.nvim_buf_get_lines(buf, 0, -1, false))
     end)
   end)
 

@@ -183,19 +183,9 @@ return {
       -- own opinion can fight ESLint's style rules; CSS/JSON/YAML/MD keep
       -- unconditional Prettier since nothing there governs their style.
       --
-      -- Absent a project opinion, fall back to Google's JS/TS style guide
-      -- (google.github.io/styleguide/{js,ts}guide.html) as this IDE's own
-      -- default rather than Prettier's stock config. In practice this is a
-      -- single real difference: Prettier defaults to double quotes; both
-      -- guides explicitly mandate single quotes. Everything else Prettier
-      -- already does by default — 2-space indent, 80-col wrap, semicolons,
-      -- trailing commas, K&R braces — either matches what's written or the
-      -- guide is silent (the TS guide explicitly doesn't specify indent
-      -- width or a trailing-comma policy). Naming/language-feature rules
-      -- (no var, interfaces over type aliases, etc.) are ESLint's domain,
-      -- not Prettier's — those need Google's own eslint-config-google/gts
-      -- installed per-project; there's no editor-global equivalent the way
-      -- jdtls's formatter profile works for Java.
+      -- Absent a project opinion, fall back to the house JS/TS style rather
+      -- than Prettier's stock config — see `prettier_house` below for the five
+      -- flags and where each one comes from.
       local prettier_config_files = {
         ".prettierrc", ".prettierrc.json", ".prettierrc.yml", ".prettierrc.yaml",
         ".prettierrc.json5", ".prettierrc.js", ".prettierrc.cjs", ".prettierrc.mjs",
@@ -203,7 +193,7 @@ return {
       }
       -- Bounded: an unbounded upward search walks to /, so a single ~/.prettierrc
       -- (or a "prettier" key in ~/package.json) would silently mark every JS/TS
-      -- project on the machine as having its own opinion and disable the Google
+      -- project on the machine as having its own opinion and disable the house
       -- fallback everywhere. See lua/config/project.lua for the ceiling.
       local project = require("config.project")
       -- package.json is also the fallback root marker: with no .git/.hg/.svn it is
@@ -217,7 +207,7 @@ return {
         -- Every package.json up to the root, not just the nearest: in a monorepo
         -- the workspace package usually has no "prettier" key and the repo root
         -- does, and stopping at the nearest one would hand the whole workspace the
-        -- Google fallback while its own prettier config (and its CI) says otherwise.
+        -- house fallback while its own prettier config (and its CI) says otherwise.
         for _, pkg in ipairs(project.find_upward(bufnr, "package.json",
           { fallback_markers = ROOT_MARKERS, limit = math.huge })) do
           local ok, decoded = pcall(vim.json.decode, table.concat(vim.fn.readfile(pkg), "\n"))
@@ -229,7 +219,7 @@ return {
         if has_prettier_config(bufnr) then
           return { "prettierd", "prettier", stop_after_first = true }
         end
-        return { "prettier_google", stop_after_first = true }
+        return { "prettier_house", stop_after_first = true }
       end
 
       require("conform").setup({
@@ -281,20 +271,55 @@ return {
         -- so they made the spawned process resolve while leaving conform
         -- convinced prettier did not exist, and formatting was skipped silently.
         formatters = {
-          -- Plain prettier (not prettierd — the daemon doesn't accept ad-hoc
-          -- CLI overrides) with Google's one confirmed formatting difference
-          -- from Prettier's stock defaults applied explicitly. prepend_args
-          -- only works when overriding an *existing* built-in formatter by
-          -- name (conform.util.merge_formatter_configs) — since this is a
-          -- new name, not a built-in override, args must be wrapped directly.
-          prettier_google = (function()
+          -- The house JS/TS style, as five explicit flags on top of Prettier's
+          -- stock defaults. Plain prettier, not prettierd — the daemon reads
+          -- only project config files and silently drops ad-hoc CLI overrides,
+          -- so every flag below would be thrown away. prepend_args only works
+          -- when overriding an *existing* built-in formatter by name
+          -- (conform.util.merge_formatter_configs); this is a new name, not a
+          -- built-in override, so args must be wrapped directly.
+          --
+          -- The style is the one the work codebases actually enforce, read off
+          -- commerce-api's eslint.config.mjs (confirmed with `eslint
+          -- --print-config`, 128 rules resolved, rather than from the file) and
+          -- matching the four legacy .eslintrc.yml copies in that repo. Only the
+          -- rules Prettier can express are here; the flags map one-to-one:
+          --
+          --   quotes: [error, single]              --single-quote
+          --   indent: [error, 2]                   --tab-width=2
+          --   max-len: [error, 120]                --print-width=120
+          --   comma-dangle: [error, never]         --trailing-comma=none
+          --   arrow-parens: [error, as-needed]     --arrow-parens=avoid
+          --
+          -- Prettier's own defaults already satisfy `semi: always`,
+          -- `object-curly-spacing: always`, `jsx-quotes: prefer-double`,
+          -- `brace-style`, `eol-last` and the whitespace rules, so those are
+          -- left unspelled rather than restated.
+          --
+          -- --tab-width=2 is Prettier's default and still passed explicitly,
+          -- because this formatter previously read `--use-tabs --tab-width=4`
+          -- to match the editor's global hard tabs. Silence about indent width
+          -- is what let that drift go unnoticed; the editor side now agrees
+          -- instead (js_ts_settings in lua/config/autocmds.lua).
+          --
+          -- One rule Prettier cannot reach: `space-before-function-paren: never`
+          -- wants `async(item, ctx) =>` and Prettier always writes
+          -- `async (item, ctx) =>`. There is no flag for it, and it only shows up
+          -- on async arrows with two or more parameters (with one,
+          -- --arrow-parens=avoid drops the parens and the question with them).
+          -- `yarn eslint:fix` is what settles those, which is also the repo's
+          -- real enforcement path — it has no prettier at all, only `eslint
+          -- --fix` on pre-push and post-commit.
+          prettier_house = (function()
             local base = require("conform.formatters.prettier")
             return vim.tbl_deep_extend("force", base, {
               args = function(self, ctx)
                 local args = base.args(self, ctx)
                 table.insert(args, "--single-quote")
-                table.insert(args, "--use-tabs")
-                table.insert(args, "--tab-width=4")
+                table.insert(args, "--tab-width=2")
+                table.insert(args, "--print-width=120")
+                table.insert(args, "--trailing-comma=none")
+                table.insert(args, "--arrow-parens=avoid")
                 return args
               end,
             })
