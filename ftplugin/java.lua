@@ -26,12 +26,11 @@ local workspace_dir = vim.fn.stdpath("data")
   .. "-"
   .. vim.fn.sha256(root_dir):sub(1, 8)
 
-local cmp_ok, cmp_lsp = pcall(require, "cmp_nvim_lsp")
-local capabilities = vim.tbl_deep_extend(
-  "force",
-  vim.lsp.protocol.make_client_capabilities(),
-  cmp_ok and cmp_lsp.default_capabilities() or {}
-)
+-- The same table lua/plugins/lsp.lua gives every other server. Shared because
+-- jdtls is the one client that does NOT go through vim.lsp.config("*"), and
+-- workspace.fileOperations.willRename — which is what lets a package move in the
+-- explorer rewrite imports — is only offered by jdtls if the client asks for it.
+local capabilities = require("config.capabilities").make()
 
 -- ── JDK 21+ discovery ───────────────────────────────────────────────────────
 -- jdtls 1.60 hard-refuses to launch on anything below Java 21 ("jdtls requires

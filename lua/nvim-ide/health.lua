@@ -214,11 +214,53 @@ local function formatters()
   end
 end
 
+local function file_operations()
+  health.start("LSP file operations")
+
+  -- The one check here that is about a negotiated capability rather than an
+  -- installed binary, and it earns its place for the same reason the others do:
+  -- when this is missing, moving a .java file in the explorer still renames it
+  -- on disk, so the only symptom is that the project stops compiling and nobody
+  -- connects that to the move. jdtls only offers willRename if the CLIENT asked
+  -- for it (InitHandler.isWorkspaceWillRenameFilesSupported), so a stale
+  -- capabilities table — or a jdtls started before lua/config/capabilities.lua
+  -- existed — fails exactly this way.
+  local clients = vim.lsp.get_clients()
+  if #clients == 0 then
+    return health.info("no language server attached — open a file and re-run")
+  end
+
+  local any = false
+  for _, client in ipairs(clients) do
+    local caps = vim.tbl_get(client.server_capabilities or {}, "workspace", "fileOperations")
+    if caps and caps.willRename then
+      any = true
+      health.ok(client.name .. ": willRename")
+    elseif client.name == "jdtls" then
+      -- Named specifically because jdtls is the server this was built for, and
+      -- the one started outside vim.lsp.config("*") (ftplugin/java.lua) — so it
+      -- is the one that can be left behind by a capabilities change.
+      health.warn("jdtls attached without willRename — renaming a .java file will not update references", {
+        "the client did not advertise workspace.fileOperations.willRename",
+        "check lua/config/capabilities.lua is used by ftplugin/java.lua, then :JdtlsRestart",
+      })
+    end
+  end
+
+  if not any then
+    -- Not an error: most servers here (lua_ls, ts_ls, emmet) simply do not
+    -- implement any file operation, and on a non-Java buffer that is the
+    -- expected report rather than a problem.
+    health.info("no attached server implements file operations")
+  end
+end
+
 function M.check()
   platform()
   jdks()
   watchfiles()
   formatters()
+  file_operations()
 end
 
 return M

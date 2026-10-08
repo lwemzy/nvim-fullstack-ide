@@ -398,10 +398,29 @@ function H.cleanup()
   end
   tracked.restores = {}
 
-  for _, id in ipairs(tracked.clients) do
+  local stopping = tracked.clients
+  for _, id in ipairs(stopping) do
     local client = vim.lsp.get_client_by_id(id)
     if client then pcall(function() client:stop(true) end) end
   end
+  -- client:stop() is not synchronous: it terminates the transport, and the
+  -- client only leaves vim.lsp.get_clients() when the transport reports the
+  -- exit back — which for helpers.fake_lsp is a vim.schedule callback, so it
+  -- cannot run while a spec body is still executing. Without this wait every
+  -- fake server in a spec file stays attached for the rest of it (measured:
+  -- round 3 saw f1, f2 and f3), and anything that iterates get_clients() —
+  -- nvim-lsp-file-operations does, for every file operation — gets answers
+  -- from servers belonging to tests that already finished.
+  --
+  -- Only the tracked ids, not #get_clients() == 0: the slow Java specs leave a
+  -- real jdtls running on purpose, and waiting for that would cost the full
+  -- timeout on every cleanup.
+  vim.wait(1000, function()
+    for _, id in ipairs(stopping) do
+      if vim.lsp.get_client_by_id(id) then return false end
+    end
+    return true
+  end, 10)
   tracked.clients = {}
 
   for _, name in ipairs(tracked.augroups) do

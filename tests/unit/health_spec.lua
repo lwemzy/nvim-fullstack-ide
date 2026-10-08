@@ -72,7 +72,13 @@ describe("nvim-ide.health", function()
     -- subject that stops being reported simply disappears from the report.
     local report = check()
     local sections = vim.tbl_map(function(e) return e.msg end, matching(report, "start", ""))
-    assert.same({ "Platform", "Java (jdtls)", "LSP file watching", "Formatters" }, sections)
+    assert.same({
+      "Platform",
+      "Java (jdtls)",
+      "LSP file watching",
+      "Formatters",
+      "LSP file operations",
+    }, sections)
   end)
 
   describe("Java", function()
@@ -183,6 +189,57 @@ describe("nvim-ide.health", function()
         table.concat(found[1].advice, " "):find("newly created", 1, true) ~= nil,
         "the advice should name the new-file symptom"
       )
+    end)
+  end)
+
+  describe("LSP file operations", function()
+    --- Stand in for the attached clients. Only the two fields the check reads,
+    --- because a real vim.lsp.Client here would be a client without a server:
+    --- server_capabilities is whatever came back from initialize, and faking
+    --- that negotiation is the whole point of the case.
+    local function fake_clients(clients)
+      H.stub(vim.lsp, "get_clients", function() return clients end)
+    end
+
+    it("says nothing is attached rather than nothing is supported", function()
+      -- The common case on a `:checkhealth` run from a scratch buffer, and the
+      -- two readings are opposite: "no server here" is fine, "server here
+      -- without willRename" is the bug this section exists for.
+      fake_clients({})
+      assert.is_true(has(check(), "info", "no language server attached"))
+    end)
+
+    it("passes when the server negotiated willRename", function()
+      fake_clients({
+        {
+          name = "jdtls",
+          server_capabilities = { workspace = { fileOperations = { willRename = {} } } },
+        },
+      })
+      assert.is_true(has(check(), "ok", "jdtls: willRename"))
+    end)
+
+    it("warns when jdtls attached without it, and says what breaks", function()
+      -- jdtls advertises willRename only if the client asked for it first
+      -- (InitHandler.isWorkspaceWillRenameFilesSupported), so this is exactly
+      -- what a stale lua/config/capabilities.lua looks like from here — and the
+      -- only other symptom is that a package move stops compiling.
+      fake_clients({ { name = "jdtls", server_capabilities = {} } })
+      local found = matching(check(), "warn", "jdtls attached without willRename")
+      assert.equals(1, #found)
+      assert.is_true(
+        table.concat(found[1].advice, " "):find("capabilities.lua", 1, true) ~= nil,
+        "the advice should name where the capability is built"
+      )
+    end)
+
+    it("does not warn about a server that simply has no file operations", function()
+      -- lua_ls, ts_ls and emmet are the normal case; reporting them would make
+      -- the section noise on every non-Java buffer.
+      fake_clients({ { name = "lua_ls", server_capabilities = {} } })
+      local report = check()
+      assert.equals(0, #matching(report, "warn", "willRename"))
+      assert.is_true(has(report, "info", "no attached server implements file operations"))
     end)
   end)
 

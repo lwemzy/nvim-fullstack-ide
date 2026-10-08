@@ -86,6 +86,17 @@ return {
     end,
   },
 
+  -- Tells attached language servers about creates/renames/deletes made in the
+  -- file explorer, so a package move rewrites imports instead of breaking them.
+  --
+  -- lazy = true with no trigger, and deliberately NO config: loading this plugin
+  -- then sources only its plugin/ dir (the :LFO command) and subscribes to
+  -- nothing, which is what lets lua/config/capabilities.lua require it at
+  -- startup — for default_capabilities() — without dragging nvim-tree along and
+  -- undoing its cmd-only trigger below. The nvim-tree side is set up from
+  -- lua/config/file_ops.lua, called at the end of nvim-tree's config.
+  { "antosha417/nvim-lsp-file-operations", lazy = true },
+
   -- File explorer
   {
     "nvim-tree/nvim-tree.lua",
@@ -148,6 +159,11 @@ return {
           },
         },
       })
+
+      -- After setup(), not before: this subscribes through nvim-tree's event
+      -- api, and the handler order it establishes matters. See
+      -- lua/config/file_ops.lua.
+      require("config.file_ops").setup()
     end,
   },
 

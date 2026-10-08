@@ -140,13 +140,10 @@ return {
       "folke/lazydev.nvim",
     },
     config = function()
-      -- ── Capabilities (advertise nvim-cmp completion to LSP servers) ────
-      local cmp_ok, cmp_lsp = pcall(require, "cmp_nvim_lsp")
-      local capabilities = vim.tbl_deep_extend(
-        "force",
-        vim.lsp.protocol.make_client_capabilities(),
-        cmp_ok and cmp_lsp.default_capabilities() or {}
-      )
+      -- ── Capabilities (nvim-cmp completion + LSP file operations) ───────
+      -- Shared with ftplugin/java.lua, which starts jdtls itself and so never
+      -- sees the vim.lsp.config("*") call below. See lua/config/capabilities.lua.
+      local capabilities = require("config.capabilities").make()
 
       -- ── Shared on_attach keymaps ────────────────────────────────────────
       -- Buffers whose inlay hints on_attach has already switched on, so that a

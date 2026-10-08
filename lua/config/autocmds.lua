@@ -178,29 +178,15 @@ autocmd({ "BufReadPost", "BufWritePost" }, {
 -- the cursor mid-expression. It also meant two writes per InsertLeave and made
 -- format-on-save nondeterministic (conform drops its result with
 -- CONCURRENT_MODIFICATION, silently, if you type during the run).
+--
+-- The write itself, including the "changed on disk" guard, lives in
+-- lua/config/autosave.lua. It is shared rather than inline because an LSP-aware
+-- rename (lua/config/file_ops.lua) has to write the same way, for buffers that
+-- are not the current one.
 autocmd({ "FocusLost", "BufLeave" }, {
   group = augroup("auto_save", { clear = true }),
   callback = function()
-    local buf = vim.api.nvim_get_current_buf()
-    if not (vim.bo[buf].modified and vim.bo[buf].buftype == "" and vim.fn.expand("%") ~= "") then
-      return
-    end
-    -- `silent! write` does NOT suppress the "file has changed since reading it,
-    -- really write (y/n)?" prompt, and a modified buffer is never auto-reloaded
-    -- by checktime — so without this guard an external edit (git pull, Claude
-    -- writing files) made Esc/buffer-switch freeze on an invisible prompt that
-    -- your next keystroke then answered. Skip the auto-save instead and let the
-    -- user resolve it with an explicit :w.
-    local name = vim.api.nvim_buf_get_name(buf)
-    local known = vim.b[buf].autosave_mtime
-    if known and vim.fn.getftime(name) > known then
-      vim.notify(
-        "auto-save skipped: " .. vim.fn.fnamemodify(name, ":t") .. " changed on disk (:w to overwrite)",
-        vim.log.levels.WARN
-      )
-      return
-    end
-    vim.cmd("silent! write")
+    require("config.autosave").write(vim.api.nvim_get_current_buf())
   end,
 })
 
