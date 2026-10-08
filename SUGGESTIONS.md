@@ -17,6 +17,10 @@ because the reasoning is the part worth not repeating.
 | 1 | `saghen/blink.cmp` | **Deferred.** The Lua matcher it replaces is ~1-2ms of a ~70ms round trip. |
 | 2 | `coder/claudecode.nvim` | **Branch trial only.** Real upside, but the case made for it here rested on three claims that are not true of this code. |
 | 3 | `folke/snacks.nvim` | **Declined as a swap; the one real gap in it is closed in-tree.** Large-file handling now lives in `lua/config/bigfile.lua`. |
+| 4 | `antosha417/nvim-lsp-file-operations` | **Researched, not yet trialed.** Closes a real gap — renaming/moving a `.java` file in nvim-tree does not currently fix up its package declaration or callers' imports. |
+| 5 | `Rahularya01/tether.nvim` | **Researched, not yet trialed.** A second, newer candidate for the same slot as #2 — same IDE protocol, plus edits land as an explicit accept/reject diff instead of writing straight to disk. |
+| 6 | `janbuchar/difftsigns.nvim` | **Researched, not yet trialed.** Small `gitsigns.nvim` complement — dims pure-reformat noise in the gutter using difftastic. |
+| 7 | `Mestane/blink-cmp-deps` | **Not actionable now.** Maven/Gradle coordinate completion, but it's a `blink.cmp` source, and #1 is deferred. |
 
 ## What was actually slow
 
@@ -163,6 +167,68 @@ now owns the thresholds and the opt-outs:
 **Worth revisiting if:** #2 is adopted *and* its snacks terminal provider turns out
 to be the one worth using — then the other modules come along for free and the
 housekeeping argument gets stronger.
+
+## 4. `antosha417/nvim-lsp-file-operations` — LSP-aware file ops from nvim-tree
+
+**Researched, not yet trialed.** Found scanning r/neovim's new-plugin feed
+(2026-10-07), cross-checked on GitHub, not yet installed or measured against
+this config.
+
+Subscribes to `nvim-tree.lua`'s file events (create/delete/rename) and
+forwards them to attached language servers as the LSP workspace file-operation
+notifications (`workspace/willRenameFiles`/`didRenameFiles` and the
+create/delete equivalents). Concretely: renaming or moving a `.java` file
+across packages in the explorer does not currently touch its `package`
+declaration or any importer's `import` line — jdtls only reacts to the
+content of a `didChange`, not a file move it wasn't told about. This plugin
+is the missing notification. Its README lists rename tested against
+lua-language-server, vtsls, basedpyright, metals, rust-analyzer and
+typescript-language-server — covering the TS/Angular side of this config too,
+though jdtls itself isn't in that tested list and would need to be confirmed
+here specifically.
+
+**Worth doing if:** confirmed against jdtls directly — the README's tested-server
+list doesn't include it, and Java package-move correctness is the entire point
+of adding this.
+
+## 5. `Rahularya01/tether.nvim` — second candidate for the Claude bridge slot
+
+**Researched, not yet trialed.** Same source and date as #4. Supersedes #2 as
+the one to evaluate first if that slot gets revisited, not an addition
+alongside it.
+
+Implements the same WebSocket MCP "IDE companion" protocol as
+`coder/claudecode.nvim` (#2) — live buffer/selection/diagnostics, no
+`claude_cli.lua`-style bridge — but adds one thing #2 doesn't: edits Claude
+proposes land as an explicit diff (`:TetherAccept`/`:TetherReject`) instead of
+writing to disk immediately. It's also multi-agent (Gemini CLI, Codex,
+OpenCode), which is not a requirement here but costs nothing if unused.
+
+**Worth doing if:** #2's branch trial happens — trial this instead, or
+alongside it, before picking one. The diff-review step is a real behavioral
+difference from both #2 and the current bridge, not just a reimplementation.
+
+## 6. `janbuchar/difftsigns.nvim` — quieter gitsigns gutter
+
+**Researched, not yet trialed.** Same source and date as #4.
+
+Small, standalone complement to `gitsigns.nvim` (already installed, already
+configured): uses `difftastic` to recognize pure reformatting/reindentation in
+a hunk and dim it in the gutter, so a real change doesn't read as "half the
+file changed" after a formatter run. No migration, no config surface overlap
+with anything existing.
+
+**Worth doing if:** picked up opportunistically — lowest-stakes item on this
+list, nothing currently depends on it one way or the other.
+
+## 7. `Mestane/blink-cmp-deps` — Maven/Gradle completion, blocked on #1
+
+**Not actionable now.** A `blink.cmp` completion source for Maven/Gradle
+dependency coordinates in `build.gradle`/`pom.xml` — exactly on-target for
+this project's stack, but it's a source, not a standalone plugin, and #1
+(`blink.cmp` itself) is deferred. Recorded here so it isn't lost: if #1 is
+ever revisited, this is a concrete point in its favor, found after that
+verdict was written.
 
 ## Measured and rejected
 
