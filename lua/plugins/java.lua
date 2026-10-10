@@ -11,29 +11,14 @@ return {
     ft = { "java", "yaml", "jproperties" },
     dependencies = { "mfussenegger/nvim-jdtls" },
     config = function()
-      -- root_dir is intentionally NOT set here: spring_boot.launch's own
-      -- fallback computes it fresh per-call via vim.fs.root(0, {...}),
-      -- which needs real per-buffer context. A static string computed once
-      -- at config-time (find_root() with no buffer, run whenever this
-      -- plugin first lazy-loads — possibly from a .yaml/.properties buffer
-      -- before any .java file is open) can resolve to an empty string,
-      -- which gets baked in permanently and produces a malformed "file://"
-      -- URI (crashing the server on every document event) for the rest of
-      -- the session.
-      -- Without this, the Spring Boot Language Server never starts at all.
-      -- spring_boot.launch builds its command as
-      --   { config.java_cmd or util.java_bin(), ..., "-XX:+UseZGC", ... }
-      -- (launch.lua:32-35) and util.java_bin() returns the bare string "java"
-      -- (util.lua:27) whenever $JAVA_HOME is unset — i.e. whatever `java` PATH
-      -- happens to resolve to. On this machine that is a Java 8 JRE, and ZGC
-      -- does not exist before 11, so the JVM aborts immediately:
-      --   Unrecognized VM option 'UseZGC'
-      --   Error: Could not create the Java Virtual Machine.
-      -- vim.lsp.start then has nothing to talk to. The failure is invisible
-      -- unless you read ~/.local/state/nvim/lsp.log, and the symptom is simply
-      -- that NOTHING attaches to application.properties and Spring property /
-      -- YAML key completion never appears. Pin a JDK we actually verified.
-      -- boot-ls needs 17+; ask for the newest such JDK.
+      -- boot-ls needs 17+; ask for the newest such JDK. spring_boot.launch
+      -- builds its command as { config.java_cmd or util.java_bin(), ...,
+      -- "-XX:+UseZGC", ... } and util.java_bin() returns the bare string
+      -- "java" whenever $JAVA_HOME is unset — whatever `java` on PATH
+      -- happens to resolve to. On a machine where that's an old JRE, ZGC
+      -- doesn't exist and the JVM aborts immediately; the only visible
+      -- symptom is that nothing ever attaches to application.properties.
+      -- Pin a JDK we actually verified instead.
       local java_cmd = require("config.jdk").java_bin(17)
       if not java_cmd then
         vim.notify(
@@ -44,16 +29,36 @@ return {
         return
       end
 
-      local resolved_opts = require("spring_boot").setup({
+      -- Heuristic: does any build file from this buffer's directory up to the
+      -- project root actually declare Spring Boot? config.project.declares_spring_boot
+      -- (which is also what the Run/Debug toolbar in config.runner asks, so the
+      -- two cannot disagree about what a Spring project is).
+      --
+      -- The bound matters: an unbounded search upward would make a stray
+      -- pom.xml above the project (in $HOME, say) turn every .java buffer on
+      -- the machine into a false "Spring Boot project" — config.project's
+      -- search stops at the VCS root rather than running to /, and stops
+      -- there rather than at the nearest build file, so a parent POM in a
+      -- multi-module Maven build (whose module inherits spring-boot without
+      -- saying so itself) is still read correctly.
+      local project = require("config.project")
+
+      require("spring_boot").setup({
         java_cmd = java_cmd,
-        -- autocmd=false: the plugin's own FileType autocmd starts boot-ls on
-        -- *every* .java file unconditionally (it only filename-gates .yaml/
-        -- .jproperties, checking they're actually application.yml/
-        -- application.properties — nothing gates .java on whether the
-        -- project even has Spring Boot as a dependency). Register our own
-        -- below instead, adding that check specifically for .java.
-        autocmd = false,
         server = {
+          -- The plugin's own root_dir (spring_boot.launch.root_dir) already
+          -- filename-gates .yaml/.jproperties (only application.yml /
+          -- application.properties) but starts boot-ls for *every* .java
+          -- file unconditionally. Wrap it to add the Spring Boot check
+          -- specifically for .java — deliberately NOT applied to yaml/
+          -- jproperties, which still deserve completion even outside a
+          -- confirmed Spring Boot project.
+          root_dir = function(bufnr, on_dir)
+            if vim.bo[bufnr].filetype == "java" and not project.declares_spring_boot(bufnr) then
+              return
+            end
+            require("spring_boot.launch").root_dir(bufnr, on_dir)
+          end,
           -- barbecue.nvim (winbar breadcrumbs) auto-attaches nvim-navic to
           -- any client advertising documentSymbolProvider, with no way to
           -- exclude a client by name. jdtls already claims that capability
@@ -68,52 +73,11 @@ return {
           end,
         },
       })
-      if not resolved_opts then return end -- boot-ls jar not installed; setup() already warned
-
-      -- Heuristic: does any build file from this buffer's directory up to the
-      -- project root actually declare Spring Boot? config.project.declares_spring_boot
-      -- (which is also what the Run/Debug toolbar in config.runner asks, so the
-      -- two cannot disagree about what a Spring project is).
-      --
-      -- The bound matters: the original `stop` here was nil whenever vim.fs.root
-      -- found no marker — i.e. exactly the loose-file case it was meant to protect
-      -- — so the search ran to / and a stray pom.xml above the file (in $HOME,
-      -- say) made every .java buffer look like a Spring Boot project and started
-      -- boot-ls for it. config.project.ceiling is never nil-bounded.
-      --
-      -- It also bounds at the VCS root rather than the nearest build file, which
-      -- fixes multi-module projects: the old bound stopped at the module, so a
-      -- parent pom.xml declaring spring-boot (with the module inheriting it) was
-      -- never read and boot-ls never started.
-      local project = require("config.project")
-
-      local function maybe_start(bufnr)
-        if vim.bo[bufnr].filetype == "java" and not project.declares_spring_boot(bufnr) then
-          return
-        end
-        -- setup()'s return value has no cmd/root_dir — those are only
-        -- computed by update_ls_config (root_dir via vim.fs.root(0, ...),
-        -- so it must run per-buffer, not once). The plugin's own ls_autocmd
-        -- always did this before calling start(); skipping it silently
-        -- passes cmd=nil to vim.lsp.start(), which just no-ops.
-        local launch = require("spring_boot.launch")
-        launch.start(launch.update_ls_config(resolved_opts))
-      end
-
-      -- Handle every *future* java/yaml/jproperties buffer...
-      vim.api.nvim_create_autocmd("FileType", {
-        group = vim.api.nvim_create_augroup("spring_boot_ls_gated", { clear = true }),
-        pattern = { "java", "yaml", "jproperties" },
-        callback = function(ev) maybe_start(ev.buf) end,
-      })
-      -- ...and the current one too: lazy.nvim loads this plugin (running
-      -- this whole config function) *in response to* FileType already
-      -- firing for the buffer that triggered it — that event doesn't get
-      -- replayed for an autocmd only just registered above, so without
-      -- this the very file you opened to trigger the ft=java/yaml load
-      -- would silently never get boot-ls started (confirmed: the autocmd
-      -- above never fires for the triggering buffer, only later ones).
-      maybe_start(vim.api.nvim_get_current_buf())
+      -- No manual "start for the current buffer" call needed: setup() calls
+      -- vim.lsp.enable("spring-boot") (auto_enable defaults true), and
+      -- vim.lsp.enable() itself re-triggers FileType for already-open
+      -- buffers when did_filetype() is true — exactly the buffer that
+      -- lazy-loaded this plugin in the first place.
     end,
   },
 }

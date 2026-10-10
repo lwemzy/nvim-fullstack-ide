@@ -747,6 +747,14 @@ return {
           vim.deepcopy(vim.lsp.config.harper_ls.filetypes or {}),
           { "javascriptreact" }
         ),
+        -- Without an explicit settings table, Neovim's client still fires
+        -- workspace/didChangeConfiguration, and harper_ls's Rust backend
+        -- rejects whatever non-object payload that sends with "Settings
+        -- must be an object" (spammed to lsp.log, harmless but noisy).
+        -- An explicit empty table is enough to satisfy it.
+        settings = {
+          ["harper-ls"] = {},
+        },
       })
 
       vim.lsp.enable({

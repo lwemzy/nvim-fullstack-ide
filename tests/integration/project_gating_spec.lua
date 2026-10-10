@@ -110,40 +110,35 @@ describe("angularls root_dir gating", function()
 end)
 
 describe("spring-boot.nvim project gating", function()
-  -- The plugin config runs exactly once per Neovim process, and it calls
-  -- maybe_start(current_buf) while running. So the launch seam has to be stubbed
-  -- *before* the first load, and what that load did is captured here for the
-  -- java_cmd / on_init assertions rather than re-triggered per test.
-  local config_time_starts
+  -- Unlike angularls (built into nvim-lspconfig, configured once at startup),
+  -- spring-boot.nvim is lazy-loaded on ft = {java, yaml, jproperties}, and its
+  -- own config() function is what calls spring_boot.setup(), which registers
+  -- vim.lsp.config["spring-boot"] (merging lua/plugins/java.lua's `server`
+  -- override — including our root_dir gate — over the plugin's own
+  -- lsp/spring-boot.lua defaults) and, by default, vim.lsp.enable("spring-boot").
+  -- So the seam to test is the same one angularls's spec above uses:
+  -- vim.lsp.config["spring-boot"].root_dir, called directly with a stubbed
+  -- on_dir, rather than anything that would start a real client.
+  local root_dir
 
   local skip_reason
-
-  --- Record every vim.lsp.start the plugin would make and suppress it.
-  --- vim.lsp.start (rather than spring_boot.launch.start) is the seam because
-  --- launch.start does its own yaml/pom.xml filename gating that is part of what
-  --- the config relies on, and because spring_boot.launch cannot even be
-  --- required until lazy has put the plugin on the runtimepath.
-  local function capture_starts()
-    return H.spy(vim.lsp, "start", function() return nil end)
-  end
 
   before_each(function()
     H.disable_autosave()
 
     -- boot-ls needs a JDK 17+; with none the config notifies and returns before
-    -- creating anything, so there is no gate to test rather than a broken one.
+    -- calling setup() at all, so there is no gate to test rather than a broken one.
     if not require("config.jdk").java_bin(17) then
       skip_reason = "no JDK 17+ on this machine — spring-boot config returns early by design"
       return
     end
 
-    local starts = capture_starts()
     H.load_plugin("spring-boot.nvim")
-    config_time_starts = config_time_starts or starts
+    root_dir = vim.lsp.config["spring-boot"] and vim.lsp.config["spring-boot"].root_dir
 
     -- setup() also bails (with its own warning) when the language-server jar is
-    -- not installed, which likewise means no augroup exists to assert on.
-    if #H.autocmds({ group = "spring_boot_ls_gated", event = "FileType" }) == 0 then
+    -- not installed, which likewise means root_dir was never overridden.
+    if not root_dir then
       skip_reason = "vscode-spring-boot-tools not installed — spring_boot.setup() bailed"
     else
       skip_reason = nil
@@ -153,79 +148,51 @@ describe("spring-boot.nvim project gating", function()
   after_each(function() H.cleanup() end)
 
   --- H.quiet_buffer sets the filetype without firing FileType, which is what
-  --- keeps ftplugin/java.lua (and the real jdtls) out of this spec. The gate
+  --- keeps ftplugin/java.lua (and the real jdtls) — and, now, the real
+  --- vim.lsp.enable("spring-boot") autocmd itself — out of this spec. root_dir
   --- reads vim.bo[bufnr].filetype and nothing else, so the suppressed event
-  --- changes nothing it can observe. Made current because
-  --- spring_boot.launch.start inspects the *current* buffer for its own
-  --- yaml/pom.xml filename checks.
+  --- changes nothing it can observe.
   local function quiet_buffer(path, ft)
     local buf = H.quiet_buffer(path, ft)
     assert.equals(ft, vim.bo[buf].filetype)
     return buf
   end
 
-  --- The gate autocmd's own callback for `pattern`. Invoked directly rather than
-  --- via nvim_exec_autocmds because FileType matches on the filetype *value*,
-  --- and nvim_exec_autocmds cannot be given both a buffer and a pattern.
-  local function gate_callback(pattern)
-    for _, ac in ipairs(H.autocmds({ group = "spring_boot_ls_gated", event = "FileType" })) do
-      if ac.pattern == pattern then return ac.callback end
-    end
+  --- Every root_dir call for a buffer at `path`/`ft`, with the arguments
+  --- on_dir was invoked with.
+  local function resolve(path, ft)
+    local buf = quiet_buffer(path, ft)
+    local dirs = {}
+    root_dir(buf, function(...) table.insert(dirs, { ... }) end)
+    return dirs
   end
 
-  --- Run the java gate for a buffer in `dir` and return the vim.lsp.start log.
+  --- resolve(), specialised to the java gate's own fixture layout.
   local function gate_java(dir)
-    local buf = quiet_buffer(dir .. "/src/main/java/com/example/Probe.java", "java")
-    local starts = capture_starts()
-    gate_callback("java")({ buf = buf })
-    return starts
+    return resolve(dir .. "/src/main/java/com/example/Probe.java", "java")
   end
-
-  it("registers its own gated FileType autocmd", function()
-    if skip_reason then return H.skip(skip_reason) end
-
-    -- One per filetype the plugin cares about. Missing "java" would mean no
-    -- Spring support at all; missing yaml/jproperties would mean no property or
-    -- application.yml completion, which is the main reason boot-ls is here.
-    local patterns = {}
-    for _, ac in ipairs(H.autocmds({ group = "spring_boot_ls_gated", event = "FileType" })) do
-      patterns[ac.pattern] = true
-    end
-    assert.same({ java = true, jproperties = true, yaml = true }, patterns)
-
-    -- ...and the plugin's OWN autocmd group must not exist. It is what
-    -- autocmd=false suppresses, and it starts boot-ls for every .java file with
-    -- no Spring check whatsoever — leaving both registered would make the gate
-    -- below decorative.
-    assert.equals(0, #H.autocmds({ group = "spring_boot_ls" }))
-  end)
 
   it("starts boot-ls for a Gradle project that declares Spring Boot", function()
     if skip_reason then return H.skip(skip_reason) end
 
-    -- is_spring_boot_project and maybe_start are locals inside the plugin's
-    -- config closure and cannot be called directly, so they are tested through
-    -- their only observable effect: whether a client is started.
-    local starts = gate_java(H.fixture("spring-gradle"))
+    local dirs = gate_java(H.fixture("spring-gradle"))
 
-    assert.equals(1, starts.count)
-    local client_config = starts[1][1]
-    assert.equals("spring-boot", client_config.name)
-    -- root_dir has to be present and non-empty: boot-ls builds file:// URIs from
+    assert.equals(1, #dirs)
+    -- The resolved root has to be non-empty: boot-ls builds file:// URIs from
     -- it, and an empty string yields a malformed "file://" that crashes the
     -- server on every document event.
-    assert.is_true(type(client_config.root_dir) == "string" and #client_config.root_dir > 0)
-    assert.is_truthy(client_config.init_options.workspaceFolders)
+    local resolved = dirs[1][1]
+    assert.is_true(type(resolved) == "string" and #resolved > 0)
   end)
 
   it("does not start boot-ls in a Gradle project with no Spring Boot", function()
     if skip_reason then return H.skip(skip_reason) end
 
     -- java-plain has a build.gradle, just not a Spring one. This is the case
-    -- the plugin's own autocmd gets wrong: it starts a second JVM language
-    -- server (plus its classpath listener against jdtls) for every Java file in
-    -- every non-Spring project.
-    assert.equals(0, gate_java(H.fixture("java-plain")).count)
+    -- the plugin's own default root_dir gets wrong: it starts a second JVM
+    -- language server (plus its classpath listener against jdtls) for every
+    -- Java file in every non-Spring project.
+    assert.equals(0, #gate_java(H.fixture("java-plain")))
   end)
 
   it("does not start boot-ls for a Java file with no build files at all", function()
@@ -235,7 +202,7 @@ describe("spring-boot.nvim project gating", function()
     H.write(dir .. "/src/main/java/com/example/Probe.java", { "class Probe {}" })
     -- No pom.xml/build.gradle anywhere, so there is nothing that could declare
     -- Spring Boot and the gate must fall through to "not a Spring project".
-    assert.equals(0, gate_java(dir).count)
+    assert.equals(0, #gate_java(dir))
   end)
 
   it("gates on build-file content, not on the presence of a build file", function()
@@ -247,14 +214,14 @@ describe("spring-boot.nvim project gating", function()
     H.write(dir .. "/.git/HEAD", { "ref: refs/heads/main" })
     H.write(dir .. "/src/main/java/com/example/Probe.java", { "class Probe {}" })
     H.write(dir .. "/build.gradle", { "plugins {", "  id 'java'", "}" })
-    assert.equals(0, gate_java(dir).count)
+    assert.equals(0, #gate_java(dir))
 
     H.write(dir .. "/build.gradle", {
       "plugins {",
       "  id 'org.springframework.boot' version '3.3.4'",
       "}",
     })
-    assert.equals(1, gate_java(dir).count)
+    assert.equals(1, #gate_java(dir))
   end)
 
   it("ignores a Spring build file above the project's VCS root", function()
@@ -276,7 +243,7 @@ describe("spring-boot.nvim project gating", function()
       "</dependency></dependencies></project>",
     })
 
-    assert.equals(0, gate_java(dir).count)
+    assert.equals(0, #gate_java(dir))
     assert.equals(1, vim.fn.filereadable(above .. "/pom.xml"))
   end)
 
@@ -297,47 +264,38 @@ describe("spring-boot.nvim project gating", function()
     })
     -- The module's own POM says nothing about Spring; only the parent does.
     H.write(dir .. "/service/pom.xml", { "<project><artifactId>service</artifactId></project>" })
-    local buf = quiet_buffer(dir .. "/service/src/main/java/com/example/Probe.java", "java")
-    local starts = capture_starts()
-    gate_callback("java")({ buf = buf })
 
-    assert.equals(1, starts.count)
-    assert.equals("spring-boot", starts[1][1].name)
+    assert.equals(1, #resolve(dir .. "/service/src/main/java/com/example/Probe.java", "java"))
   end)
 
   it("does not gate yaml/jproperties on the Spring check", function()
     if skip_reason then return H.skip(skip_reason) end
 
-    -- Deliberate asymmetry: the gate only short-circuits filetype "java".
-    -- application.yml / application.properties are filename-gated by
-    -- spring_boot.launch.start itself, and running the build-file heuristic on
-    -- them as well would break the standalone-config-file case boot-ls is best
-    -- at. Asserted so the asymmetry is a decision, not an accident.
-    -- java-plain, i.e. the very project the java gate above refuses to start in.
+    -- Deliberate asymmetry: our wrapper only short-circuits filetype "java".
+    -- application.yml / application.properties are filename-gated by the
+    -- plugin's own spring_boot.launch.root_dir, and running the build-file
+    -- heuristic on them as well would break the standalone-config-file case
+    -- boot-ls is best at. Asserted so the asymmetry is a decision, not an
+    -- accident. java-plain, i.e. the very project the java gate above refuses
+    -- to start in.
     local dir = H.fixture("java-plain")
     local path = H.write(dir .. "/src/main/resources/application.properties", { "server.port=8080" })
-    local buf = quiet_buffer(path, "jproperties")
 
-    local starts = capture_starts()
-    gate_callback("jproperties")({ buf = buf })
-    assert.equals(1, starts.count)
+    assert.equals(1, #resolve(path, "jproperties"))
   end)
 
   describe("client config", function()
-    local client_config
-
-    before_each(function()
-      if skip_reason then return end
-      -- The config-time maybe_start call: same resolved_opts every later start
-      -- is built from, so its client config is the one to inspect.
-      client_config = config_time_starts and config_time_starts[1] and config_time_starts[1][1]
-    end)
-
     it("pins an explicit JDK 17+ as java_cmd", function()
       if skip_reason then return H.skip(skip_reason) end
-      assert.is_truthy(client_config, "the config-time maybe_start never reached vim.lsp.start")
 
-      local java = client_config.cmd[1]
+      -- bootls_cmd is the same function vim.lsp.config["spring-boot"].cmd calls
+      -- (via require("spring_boot.config")) once a client actually starts;
+      -- calling it directly here gets the same command line without spawning a
+      -- real JVM.
+      local cmd = require("spring_boot.launch").bootls_cmd(require("spring_boot.config"))
+      assert.is_truthy(cmd, "bootls_cmd returned nil — boot-ls jar not resolved")
+
+      local java = cmd[1]
       -- An absolute path, never the bare string "java": the plugin's fallback
       -- resolves whatever `java` is on PATH, and boot-ls's command line uses
       -- -XX:+UseZGC, which does not exist before JDK 11. On a machine whose
@@ -348,19 +306,25 @@ describe("spring-boot.nvim project gating", function()
       assert.equals(1, vim.fn.executable(java))
       -- ...and it is the JDK config.jdk picked, not something the plugin guessed.
       assert.equals(require("config.jdk").java_bin(17), java)
-      assert.is_truthy(vim.tbl_contains(client_config.cmd, "-XX:+UseZGC"))
+      assert.is_truthy(vim.tbl_contains(cmd, "-XX:+UseZGC"))
     end)
 
     it("strips documentSymbolProvider in on_init", function()
       if skip_reason then return H.skip(skip_reason) end
-      assert.is_truthy(client_config)
+
+      local on_init = vim.lsp.config["spring-boot"].on_init
+      assert.is_truthy(on_init)
 
       local client = {
         id = 1,
         name = "spring-boot",
         server_capabilities = { documentSymbolProvider = true, hoverProvider = true },
+        -- boot_ls_init also pushes settings via client:notify(...); this test
+        -- is only about the documentSymbolProvider strip, so the real push is
+        -- a no-op stub rather than something to assert on here.
+        notify = function() end,
       }
-      client_config.on_init(client, {})
+      on_init(client, {})
 
       -- barbecue/navic auto-attach to any client advertising document symbols
       -- and have no per-client exclusion. jdtls already claims it for Java and
