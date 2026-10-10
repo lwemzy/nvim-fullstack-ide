@@ -423,6 +423,18 @@ function H.cleanup()
   end, 10)
   tracked.clients = {}
 
+  -- Defense in depth, untracked: opening a real .java file in a real Spring
+  -- Boot project — via plain H.edit, not H.quiet_buffer — spawns a real,
+  -- full-weight vscode-spring-boot-tools JVM the moment spring-boot.nvim's
+  -- FileType gate sees it (confirmed directly: tests/full_init.lua, a real
+  -- buffer, nothing else, ~200ms to a live process). Nothing in this suite
+  -- currently starts one on purpose, unlike the jdtls specs below, so any
+  -- that exists at cleanup time is a leak regardless of which test caused it
+  -- — nothing here should rely on one surviving past its own spec file.
+  for _, client in ipairs(vim.lsp.get_clients({ name = "spring-boot" })) do
+    pcall(function() client:stop(true) end)
+  end
+
   for _, name in ipairs(tracked.augroups) do
     pcall(vim.api.nvim_del_augroup_by_name, name)
   end

@@ -302,13 +302,10 @@ describe("runner", function()
       local dir = H.fixture("spring-gradle")
       local cwd = vim.fn.getcwd()
       vim.cmd("silent lcd " .. vim.fn.fnameescape(dir))
-      -- Real filetype detection (below) also fires spring-boot.nvim's own
-      -- gated FileType autocmd for real, which would otherwise launch a real
-      -- vscode-spring-boot-tools JVM on every run of this spec with nothing to
-      -- stop it afterwards — this case only needs runner.target()'s own
-      -- build-file detection, not a live LSP, so the launch itself is stubbed
-      -- the same way project_gating_spec.lua stubs it.
-      H.spy(vim.lsp, "start", function() return nil end)
+      -- H.quiet_buffer suppresses FileType for the whole load (not just the
+      -- explicit filetype assignment), so this never reaches spring-boot.nvim's
+      -- real gate at all — only runner.target()'s own build-file detection,
+      -- which is the thing under test here.
       local ok, err = pcall(function()
         H.quiet_buffer(dir .. "/src/main/java/com/example/demo/DemoApplication.java", nil)
         -- Move the cwd away *after* opening the file, so nothing below can be
