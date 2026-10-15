@@ -264,6 +264,92 @@ return {
         gate("n", "<leader>lC", vim.lsp.buf.outgoing_calls,
           "textDocument/prepareCallHierarchy", "Outgoing calls (callees)")
 
+        -- ── Source actions (organize/add/remove imports, fix all) ─────────
+        -- Java has had these since the start (ftplugin/java.lua binds <F9> and
+        -- <C-S-o> to jdtls.organize_imports, and <leader>jg* to the rest);
+        -- TS/JS had none, so a file with a stale import list could only be
+        -- fixed by hunting the action out of the <leader>ca menu.
+        --
+        -- NOT through gate(): gate() keys on method support, and the method
+        -- here is textDocument/codeAction, which *every* server advertises. So
+        -- gate() would install these four in Lua, Java and JSON buffers too,
+        -- where pressing them finds nothing. What actually decides whether a
+        -- server can do this is the code action *kinds* it advertises, which is
+        -- what advertises() below reads.
+        --
+        -- Scoped to the client advertising source.organizeImports rather than
+        -- to `client.name == "ts_ls"`: a name test is a guess about which
+        -- server is configured, and it also breaks the day this config moves to
+        -- vtsls. It also picks exactly one client per buffer, which matters for
+        -- "Fix all" — eslint advertises source.fixAll.eslint and nothing else
+        -- in this list, so without the organizeImports condition both servers
+        -- would install <leader>lF on the same buffer and whichever attached
+        -- last would own it. eslint's fix-all already runs on save (see the
+        -- eslint_fix augroup below, and <leader>ul to turn it off).
+        --
+        --- Does this server list a code action kind at or under `kind`?
+        --- Kinds are hierarchical, and tsserver suffixes its own: it advertises
+        --- "source.organizeImports.ts", not "source.organizeImports".
+        local function advertises(kind)
+          local cap = client.server_capabilities.codeActionProvider
+          for _, k in ipairs(type(cap) == "table" and cap.codeActionKinds or {}) do
+            if k == kind or vim.startswith(k, kind .. ".") then return true end
+          end
+          return false
+        end
+
+        if advertises("source.organizeImports") then
+          --- Run one whole-document source action and apply it.
+          local function source_action(kind)
+            return function()
+              -- An explicit whole-buffer range, which is the load-bearing part:
+              -- vim.lsp.buf.code_action with no range sends the *cursor*
+              -- position, and tsserver answers these kinds for the range it is
+              -- given. Verified: with the cursor range, "Remove all unused
+              -- code" came back as a resolve-only stub that applied nothing
+              -- unless the cursor happened to sit on the unused declaration —
+              -- a key that works or does nothing depending on where you left
+              -- the cursor. With the whole-buffer range the server returns the
+              -- edit outright.
+              --
+              -- The end column is the last character's, not the line length:
+              -- range here is mark-like and INCLUSIVE, so make_given_range_params
+              -- adds one to it before sending (LSP end positions are exclusive).
+              -- Passing #tail would send one past the end of the buffer.
+              local last = vim.api.nvim_buf_line_count(bufnr)
+              local tail = vim.api.nvim_buf_get_lines(bufnr, last - 1, last, false)[1] or ""
+              vim.lsp.buf.code_action({
+                apply = true,
+                range = { start = { 1, 0 }, ["end"] = { last, math.max(#tail - 1, 0) } },
+                -- diagnostics = {} rather than omitting it: left unset, nvim
+                -- fills context.diagnostics with whatever sits on the cursor
+                -- line, which has nothing to do with a document-wide action.
+                -- tsserver computes its own either way (checked: identical
+                -- edits with an empty list and with the real diagnostics).
+                context = { only = { kind }, diagnostics = {} },
+                -- apply only auto-applies when exactly ONE action survives
+                -- filtering, and `only` matches hierarchically — so without
+                -- this, source.fixAll in a buffer with eslint attached matches
+                -- both source.fixAll.ts and source.fixAll.eslint and puts up a
+                -- picker instead of just fixing the file.
+                filter = function(_, client_id) return client_id == client.id end,
+              })
+            end
+          end
+
+          map("<leader>li", source_action("source.organizeImports"),  "Organize imports")
+          map("<leader>lm", source_action("source.addMissingImports"), "Add missing imports")
+          map("<leader>lu", source_action("source.removeUnused"),      "Remove unused code")
+          map("<leader>lF", source_action("source.fixAll"),            "Fix all fixable issues")
+          -- The same key ftplugin/java.lua uses for organize imports, so the
+          -- action is in one place across both languages. Buffer-local, so it
+          -- only shadows keymaps.lua's global <C-S-o> ("close all other
+          -- splits") in TS/JS buffers — exactly what the Java ftplugin has
+          -- always done. <leader>li is the one to reach for if a terminal
+          -- emulator swallows Ctrl+Shift+O before Neovim sees it.
+          map("<C-S-o>", source_action("source.organizeImports"), "Organize imports")
+        end
+
         gate("n", "<leader>uh", function()
           vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }), { bufnr = bufnr })
         end, "textDocument/inlayHint", "Toggle inlay hints")

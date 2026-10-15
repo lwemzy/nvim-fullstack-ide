@@ -461,6 +461,227 @@ describe("lsp on_attach", function()
   end)
 end)
 
+-- The four source-level code actions on_attach adds for TS/JS: organize
+-- imports, add the missing ones, drop the unused ones, fix everything fixable.
+--
+-- Three things can go wrong here and only one of them is a missing mapping:
+--
+--   1. GATED ON THE WRONG THING. The LSP method is textDocument/codeAction,
+--      which every server advertises — so gating on the method (what gate()
+--      does, and the obvious-looking way to add these) would put all five keys
+--      in Lua, Java and JSON buffers, where pressing them finds nothing. The
+--      real gate is the code action *kinds* the server lists, and the
+--      caps.full case below is the one that catches a regression to gate().
+--   2. SENT WITH THE CURSOR'S RANGE. vim.lsp.buf.code_action defaults to the
+--      cursor position, and tsserver answers these kinds for the range it is
+--      handed: with the default, "Remove all unused code" only removed the
+--      unused declaration the cursor happened to be sitting on, and did
+--      nothing at all anywhere else. Verified against a real ts_ls before the
+--      explicit range went in. So the range assertion below is the point of
+--      the whole spec, not a detail of it.
+--   3. TWO SERVERS CLAIMING THE SAME KEY. eslint advertises
+--      source.fixAll.eslint, `only` matches kinds hierarchically, and
+--      `apply = true` only applies when exactly ONE action survives — so
+--      without the per-client filter, <leader>lF in a TS buffer with eslint
+--      attached puts up a two-item picker instead of fixing the file.
+describe("on_attach source code actions", function()
+  local bufnr
+
+  --- lhs -> the action kind pressing it must request.
+  local SOURCE_MAPS = {
+    { lhs = "<leader>li", kind = "source.organizeImports", desc = "Organize imports" },
+    { lhs = "<leader>lm", kind = "source.addMissingImports", desc = "Add missing imports" },
+    { lhs = "<leader>lu", kind = "source.removeUnused", desc = "Remove unused code" },
+    { lhs = "<leader>lF", kind = "source.fixAll", desc = "Fix all fixable issues" },
+    -- The same key ftplugin/java.lua binds to jdtls.organize_imports, so the
+    -- action is in one place across both languages.
+    { lhs = "<C-S-o>", kind = "source.organizeImports", desc = "Organize imports" },
+  }
+
+  before_each(function()
+    H.load_plugin("nvim-lspconfig")
+    H.disable_autosave()
+    bufnr = H.edit(H.write(H.tmpdir("source-actions") .. "/sample.txt", {
+      "one(two)",
+      "three",
+    }))
+  end)
+
+  after_each(function()
+    H.cleanup()
+  end)
+
+  local function attach(name, capabilities, responses)
+    local before = #vim.lsp.get_clients({ bufnr = bufnr })
+    responses = vim.tbl_extend("keep", responses or {}, {
+      -- caps.ts_source advertises resolveProvider, as the real tsserver does,
+      -- so vim.lsp.buf.code_action resolves before applying. Echo the action
+      -- back: these fakes already put the edit in the first response, which is
+      -- what tsserver does for organizeImports/removeUnused/fixAll. (Answering
+      -- nil here crashes nvim's apply_action, so an absent entry would make
+      -- every apply spec fail for a reason that is not about this config.)
+      ["codeAction/resolve"] = function(params) return params end,
+    })
+    local srv = fake_lsp.start({
+      name = name,
+      bufnr = bufnr,
+      root_dir = H.tmpdir("src-root-" .. name),
+      capabilities = capabilities,
+      responses = responses,
+    })
+    H.track_client(srv.id)
+    H.wait_for("on_attach ran for " .. name, function()
+      return #vim.lsp.get_clients({ bufnr = bufnr }) > before
+        and buf_map("n", "K", bufnr) ~= nil
+    end)
+    return srv
+  end
+
+  it("maps all four for a server that advertises the source kinds", function()
+    attach("ts_like", fake_lsp.caps.ts_source)
+
+    for _, m in ipairs(SOURCE_MAPS) do
+      local d = buf_map("n", m.lhs, bufnr)
+      assert.is_not_nil(d, m.lhs .. " should be mapped for a tsserver-like server")
+      assert.equals(m.desc, d.desc)
+    end
+  end)
+
+  it("maps none of them for a server that only advertises the method", function()
+    -- caps.full has `codeActionProvider = true`: the method is supported, the
+    -- kinds are unknown. This is lua_ls, jdtls and every other server in this
+    -- config — and it is the exact shape that gate() would have accepted.
+    local srv = attach("plain_ls", fake_lsp.caps.full)
+    assert.is_true(srv.client.server_capabilities.codeActionProvider,
+      "fixture drift: caps.full must advertise the method without kinds")
+    -- Guard the guard: the generic code-action mapping IS expected here, so a
+    -- buffer with no mappings at all cannot make the assertions below pass.
+    assert.is_not_nil(buf_map("n", "<leader>ca", bufnr))
+
+    for _, m in ipairs(SOURCE_MAPS) do
+      assert.is_nil(buf_map("n", m.lhs, bufnr),
+        m.lhs .. " must not be mapped for a server with no source kinds")
+    end
+  end)
+
+  it("maps none of them for eslint, which fixes but does not organize", function()
+    attach("eslint_like", fake_lsp.caps.eslint_source)
+
+    for _, m in ipairs(SOURCE_MAPS) do
+      assert.is_nil(buf_map("n", m.lhs, bufnr),
+        m.lhs .. " must not come from a server that cannot organize imports")
+    end
+  end)
+
+  it("requests each kind over the whole buffer, not the cursor's position", function()
+    local srv = attach("ts_like", fake_lsp.caps.ts_source)
+    -- Cursor parked on the LAST line and past column 0, so a cursor-derived
+    -- range would be visibly different from the asserted one.
+    vim.api.nvim_win_set_cursor(0, { 2, 3 })
+
+    for _, m in ipairs(SOURCE_MAPS) do
+      local before = #srv.requests_for("textDocument/codeAction")
+      H.capture_notifications(function() H.run_keymap("n", m.lhs, bufnr) end)
+      local reqs = srv.requests_for("textDocument/codeAction")
+      assert.is_true(#reqs > before, m.lhs .. " should have produced a code action request")
+      local params = reqs[#reqs].params
+
+      assert.same({ m.kind }, params.context.only)
+      -- Empty rather than absent: left unset, vim.lsp.buf.code_action fills
+      -- context.diagnostics from the cursor line, which has nothing to do with
+      -- a document-wide action.
+      assert.same({}, params.context.diagnostics)
+      -- Line 0 char 0 through the end of the last line — "three" is 5 chars.
+      assert.same({ line = 0, character = 0 }, params.range.start)
+      assert.same({ line = 1, character = 5 }, params.range["end"])
+    end
+  end)
+
+  it("applies the edit the server answers with", function()
+    local uri = vim.uri_from_bufnr(bufnr)
+    local srv = attach("ts_like", fake_lsp.caps.ts_source, {
+      -- `changes` rather than `documentChanges`: this is about on_attach getting
+      -- the edit applied, and documentChanges carries a document version that
+      -- would make the spec about version matching instead.
+      ["textDocument/codeAction"] = {
+        {
+          title = "Remove all unused code",
+          kind = "source.removeUnused.ts",
+          edit = {
+            changes = {
+              [uri] = {
+                {
+                  range = {
+                    start = { line = 1, character = 0 },
+                    ["end"] = { line = 1, character = 5 },
+                  },
+                  newText = "fixed",
+                },
+              },
+            },
+          },
+        },
+      },
+    })
+
+    assert.same({ "one(two)", "three" }, vim.api.nvim_buf_get_lines(bufnr, 0, -1, false))
+    H.run_keymap("n", "<leader>lu", bufnr)
+    H.wait_for("edit applied", function()
+      return vim.api.nvim_buf_get_lines(bufnr, 1, 2, false)[1] == "fixed"
+    end)
+    assert.same({ "one(two)", "fixed" }, vim.api.nvim_buf_get_lines(bufnr, 0, -1, false))
+  end)
+
+  it("fixes all without a picker when eslint is attached to the same buffer", function()
+    local uri = vim.uri_from_bufnr(bufnr)
+    local function fix_all(kind, newText)
+      return {
+        {
+          title = "Fix all (" .. kind .. ")",
+          kind = kind,
+          edit = {
+            changes = {
+              [uri] = {
+                {
+                  range = {
+                    start = { line = 1, character = 0 },
+                    ["end"] = { line = 1, character = 5 },
+                  },
+                  newText = newText,
+                },
+              },
+            },
+          },
+        },
+      }
+    end
+
+    -- eslint first, so that if the filter were missing it would be the one
+    -- whose edit landed — a failure that reads as "the wrong fixer ran".
+    attach("eslint_like", fake_lsp.caps.eslint_source, {
+      ["textDocument/codeAction"] = fix_all("source.fixAll.eslint", "ESLINT"),
+    })
+    attach("ts_like", fake_lsp.caps.ts_source, {
+      ["textDocument/codeAction"] = fix_all("source.fixAll.ts", "TSSERVER"),
+    })
+    assert.equals(2, #vim.lsp.get_clients({ bufnr = bufnr }))
+
+    local selected = 0
+    H.stub(vim.ui, "select", function(items, _, on_choice)
+      selected = selected + 1
+      on_choice(nil)
+    end)
+
+    H.run_keymap("n", "<leader>lF", bufnr)
+    H.wait_for("ts fix applied", function()
+      return vim.api.nvim_buf_get_lines(bufnr, 1, 2, false)[1] == "TSSERVER"
+    end)
+    -- Both servers answered with a source.fixAll* action and `only` matches
+    -- hierarchically, so this is 0 only because the filter removed eslint's.
+    assert.equals(0, selected)
+  end)
+end)
+
 describe("eslint on_attach chaining", function()
   local bufnr
 

@@ -163,6 +163,38 @@ F.caps = {
   minimal = {
     hoverProvider = true,
   },
+  -- tsserver's real codeActionProvider, transcribed from a live ts_ls
+  -- `initialize` response. Two details here are load-bearing for the source
+  -- action mappings in on_attach and are easy to "tidy" away:
+  --   * it is a TABLE with codeActionKinds, not `true` — which is what tells
+  --     those mappings this server can organize imports at all;
+  --   * every kind carries tsserver's own `.ts` suffix, so the config has to
+  --     match kinds hierarchically rather than by equality.
+  ts_source = {
+    hoverProvider = true,
+    codeActionProvider = {
+      resolveProvider = true,
+      codeActionKinds = {
+        "source.fixAll.ts",
+        "source.removeUnused.ts",
+        "source.addMissingImports.ts",
+        "quickfix",
+        "source.organizeImports.ts",
+        "source.removeUnusedImports.ts",
+        "source.sortImports.ts",
+        "refactor",
+      },
+    },
+  },
+  -- vscode-eslint-language-server: it advertises a source.fixAll kind too, but
+  -- nothing that organizes imports. It attaches to the same TS buffer as
+  -- ts_source above, which is why "who owns <leader>lF" has to be decided by
+  -- something other than "advertises source.fixAll".
+  eslint_source = {
+    codeActionProvider = {
+      codeActionKinds = { "quickfix", "source.fixAll.eslint" },
+    },
+  },
 }
 
 return F
