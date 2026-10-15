@@ -1,5 +1,15 @@
-# Plugin data managed by lazy.nvim — not tracked
-lazy-lock.json
+# lazy-lock.json is deliberately NOT here: it is tracked.
+#
+# Untracked, every machine resolved plugin branches to whatever was current the
+# day it last ran :Lazy update, so the same config ran on different plugin
+# versions. That is not a theoretical drift — spring-boot.nvim changed its API
+# between two machines' checkouts, Spring Boot LS stopped attaching to every
+# .java file on one of them only, and the test suite could not reproduce it
+# because the Mac had the older plugin. See CHANGELOG.md 2026-10-15.
+#
+# The cost is that `:Lazy update` now shows up as a diff. That is the point:
+# a plugin version change becomes a reviewable commit instead of a silent
+# difference between two laptops.
 
 # Compiled Lua cache
 *.luac

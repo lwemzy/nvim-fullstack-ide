@@ -380,4 +380,65 @@ describe("lua/plugins specs", function()
         "theme.lua never applies a colorscheme")
     end)
   end)
+
+  -- lazy-lock.json is tracked on purpose (see .gitignore). Tracking it only
+  -- pins anything if it stays complete: a plugin added to lua/plugins/ without
+  -- a regenerated lock is unpinned, so every machine resolves its branch to
+  -- whatever is current the day it runs :Lazy update. That is how this config
+  -- ended up running two different spring-boot.nvim API versions on two
+  -- laptops, with Spring Boot LS broken on one of them and a test suite that
+  -- could not reproduce it.
+  describe("lazy-lock.json", function()
+    local lock_path = vim.fn.fnamemodify(S.plugins_dir, ":h:h") .. "/lazy-lock.json"
+
+    local function lock()
+      local text = read_text(lock_path)
+      assert.is_not_nil(text, "lazy-lock.json is missing — it is tracked, not generated")
+      local ok, decoded = pcall(vim.json.decode, text)
+      assert.is_true(ok, "lazy-lock.json is not valid JSON: " .. tostring(decoded))
+      return decoded
+    end
+
+    it("pins a commit for every declared plugin", function()
+      local pinned = lock()
+      local missing = {}
+      for _, item in ipairs(S.all()) do
+        -- lazy keys the lockfile by the plugin's `name`, which defaults to the
+        -- repo's basename unless the spec overrides it.
+        local name = item.spec and type(item.spec) == "table" and item.spec.name
+          or item.repo:match("([^/]+)$")
+        local entry = pinned[name]
+        if not entry then
+          table.insert(missing, name .. " (" .. item.repo .. ")")
+        else
+          assert.is_string(entry.commit, name .. " has no pinned commit")
+          assert.equals(40, #entry.commit, name .. "'s commit is not a full sha")
+        end
+      end
+      assert.same({}, missing,
+        "run :Lazy update (or :Lazy install) and commit lazy-lock.json — "
+          .. "unpinned plugins drift between machines")
+    end)
+
+    it("pins nothing that is no longer declared", function()
+      -- The other direction, and the reason it matters is cosmetic-looking but
+      -- is not: a stale entry is a plugin lazy will happily clean, and its
+      -- presence here is the signal that the lock was hand-edited rather than
+      -- regenerated.
+      local declared = {}
+      for _, item in ipairs(S.all()) do
+        local name = item.spec and type(item.spec) == "table" and item.spec.name
+          or item.repo:match("([^/]+)$")
+        declared[name] = true
+      end
+      -- lazy.nvim bootstraps itself and is not declared in lua/plugins/.
+      declared["lazy.nvim"] = true
+      local stale = {}
+      for name in pairs(lock()) do
+        if not declared[name] then table.insert(stale, name) end
+      end
+      table.sort(stale)
+      assert.same({}, stale, "lazy-lock.json pins plugins no spec declares")
+    end)
+  end)
 end)
