@@ -176,16 +176,14 @@ return {
     event = "BufWritePre",
     cmd = "ConformInfo",
     config = function()
-      -- Projects with no prettier config of their own (no .prettierrc*, no
-      -- prettier.config.*, no "prettier" key in package.json) get a project's
-      -- explicit choice respected exactly (plain prettierd/prettier, no
-      -- overrides) whenever one exists. Only affects JS/TS, where a project's
-      -- own opinion can fight ESLint's style rules; CSS/JSON/YAML/MD keep
-      -- unconditional Prettier since nothing there governs their style.
+      -- A project's explicit choice is respected exactly (plain
+      -- prettierd/prettier, no overrides) whenever it has one. Only affects
+      -- JS/TS, where a project's own opinion can fight ESLint's style rules;
+      -- CSS/JSON/YAML/MD keep unconditional Prettier since nothing there
+      -- governs their style.
       --
       -- Absent a project opinion, fall back to the house JS/TS style rather
-      -- than Prettier's stock config — see `prettier_house` below for the five
-      -- flags and where each one comes from.
+      -- than a formatter's stock config — see `oxfmt_house` below.
       local prettier_config_files = {
         ".prettierrc", ".prettierrc.json", ".prettierrc.yml", ".prettierrc.yaml",
         ".prettierrc.json5", ".prettierrc.js", ".prettierrc.cjs", ".prettierrc.mjs",
@@ -215,19 +213,41 @@ return {
         end
         return false
       end
-      local function prettier_or_none(bufnr)
+      -- The same question for oxfmt, which the house fallback now runs. Needed
+      -- because the fallback passes `-c <this repo's .oxfmtrc.json>`
+      -- --disable-nested-config, so a project that has written its own oxfmt
+      -- config would have it overridden — the exact failure the prettier gate
+      -- above exists to prevent, newly reachable now that the fallback is oxfmt.
+      --
+      -- vite.config.ts/js are deliberately NOT in this list even though oxfmt
+      -- reads a `fmt` section from them (and conform's built-in oxfmt treats
+      -- them as config files): the overwhelming majority of Vite projects have
+      -- no such section, so counting them would hand every Vite app oxfmt's
+      -- stock defaults — double quotes, 80 columns — while reporting that the
+      -- project asked for it.
+      local oxfmt_config_files = { ".oxfmtrc.json", ".oxfmtrc.jsonc", "oxfmt.config.ts" }
+      local function has_oxfmt_config(bufnr)
+        return project.find_upward(bufnr, oxfmt_config_files, { fallback_markers = ROOT_MARKERS })[1] ~= nil
+      end
+
+      local function jsts_formatters(bufnr)
         if has_prettier_config(bufnr) then
           return { "prettierd", "prettier", stop_after_first = true }
         end
-        return { "prettier_house", stop_after_first = true }
+        if has_oxfmt_config(bufnr) then
+          -- The built-in, not oxfmt_house: it finds and reads the project's
+          -- config itself, which is the whole point of deferring here.
+          return { "oxfmt", stop_after_first = true }
+        end
+        return { "oxfmt_house", stop_after_first = true }
       end
 
       require("conform").setup({
         formatters_by_ft = {
-          javascript      = prettier_or_none,
-          javascriptreact = prettier_or_none,
-          typescript      = prettier_or_none,
-          typescriptreact = prettier_or_none,
+          javascript      = jsts_formatters,
+          javascriptreact = jsts_formatters,
+          typescript      = jsts_formatters,
+          typescriptreact = jsts_formatters,
           json            = { "prettierd", "prettier", stop_after_first = true },
           jsonc           = { "prettierd", "prettier", stop_after_first = true },
           css             = { "prettierd", "prettier", stop_after_first = true },
@@ -271,58 +291,77 @@ return {
         -- so they made the spawned process resolve while leaving conform
         -- convinced prettier did not exist, and formatting was skipped silently.
         formatters = {
-          -- The house JS/TS style, as five explicit flags on top of Prettier's
-          -- stock defaults. Plain prettier, not prettierd — the daemon reads
-          -- only project config files and silently drops ad-hoc CLI overrides,
-          -- so every flag below would be thrown away. prepend_args only works
-          -- when overriding an *existing* built-in formatter by name
-          -- (conform.util.merge_formatter_configs); this is a new name, not a
-          -- built-in override, so args must be wrapped directly.
+          -- The house JS/TS style, run by oxfmt (the Oxc project's formatter)
+          -- against the .oxfmtrc.json at the root of this config repo.
           --
-          -- The style is the one the work codebases actually enforce, read off
-          -- commerce-api's eslint.config.mjs (confirmed with `eslint
-          -- --print-config`, 128 rules resolved, rather than from the file) and
-          -- matching the four legacy .eslintrc.yml copies in that repo. Only the
-          -- rules Prettier can express are here; the flags map one-to-one:
+          -- oxfmt rather than prettier because it is Prettier-compatible by
+          -- design and measurably cheaper: on 60 real commerce-api files put
+          -- through both via stdin, the output was byte-identical in all 60
+          -- (and in hand-written .tsx/.jsx cases), while five runs cost prettier
+          -- 0.33s of CPU and oxfmt 0.03s. Formatting is async
+          -- (format_after_save), so the win is machine load rather than
+          -- latency — but it is the same style for a tenth of the work.
           --
-          --   quotes: [error, single]              --single-quote
-          --   indent: [error, 2]                   --tab-width=2
-          --   max-len: [error, 120]                --print-width=120
-          --   comma-dangle: [error, never]         --trailing-comma=none
-          --   arrow-parens: [error, as-needed]     --arrow-parens=avoid
+          -- The style itself is unchanged, and is the one the work codebases
+          -- actually enforce: read off commerce-api's eslint.config.mjs
+          -- (confirmed with `eslint --print-config`, 128 rules resolved, rather
+          -- than from the file) and matching the four legacy .eslintrc.yml
+          -- copies in that repo. The five keys in .oxfmtrc.json map one-to-one
+          -- onto the ESLint rules Prettier-style formatters can express:
           --
-          -- Prettier's own defaults already satisfy `semi: always`,
-          -- `object-curly-spacing: always`, `jsx-quotes: prefer-double`,
-          -- `brace-style`, `eol-last` and the whitespace rules, so those are
-          -- left unspelled rather than restated.
+          --   quotes: [error, single]              singleQuote: true
+          --   indent: [error, 2]                   tabWidth: 2
+          --   max-len: [error, 120]                printWidth: 120
+          --   comma-dangle: [error, never]         trailingComma: "none"
+          --   arrow-parens: [error, as-needed]     arrowParens: "avoid"
           --
-          -- --tab-width=2 is Prettier's default and still passed explicitly,
-          -- because this formatter previously read `--use-tabs --tab-width=4`
-          -- to match the editor's global hard tabs. Silence about indent width
-          -- is what let that drift go unnoticed; the editor side now agrees
-          -- instead (js_ts_settings in lua/config/autocmds.lua).
+          -- `semi: always`, `object-curly-spacing: always`,
+          -- `jsx-quotes: prefer-double`, `brace-style` and `eol-last` are
+          -- already the default on both formatters, so they stay unspelled.
           --
-          -- One rule Prettier cannot reach: `space-before-function-paren: never`
-          -- wants `async(item, ctx) =>` and Prettier always writes
-          -- `async (item, ctx) =>`. There is no flag for it, and it only shows up
-          -- on async arrows with two or more parameters (with one,
-          -- --arrow-parens=avoid drops the parens and the question with them).
-          -- `yarn eslint:fix` is what settles those, which is also the repo's
-          -- real enforcement path — it has no prettier at all, only `eslint
-          -- --fix` on pre-push and post-commit.
-          prettier_house = (function()
-            local base = require("conform.formatters.prettier")
-            return vim.tbl_deep_extend("force", base, {
-              args = function(self, ctx)
-                local args = base.args(self, ctx)
-                table.insert(args, "--single-quote")
-                table.insert(args, "--tab-width=2")
-                table.insert(args, "--print-width=120")
-                table.insert(args, "--trailing-comma=none")
-                table.insert(args, "--arrow-parens=avoid")
-                return args
-              end,
+          -- A config FILE, not flags, because oxfmt has no style CLI options at
+          -- all — `oxfmt --help` lists only mode/output/ignore/runtime options.
+          -- So the style has to live somewhere on disk, and it lives in this
+          -- repo so that it travels with the config instead of having to be
+          -- planted in every project that lacks one.
+          --
+          -- One rule neither formatter can reach: `space-before-function-paren:
+          -- never` wants `async(item, ctx) =>` and both write
+          -- `async (item, ctx) =>`. It only shows up on async arrows with two or
+          -- more parameters (with one, arrowParens: avoid drops the parens and
+          -- the question with them). `yarn eslint:fix` is what settles those,
+          -- which is the work repo's only enforcement path anyway — it ships no
+          -- prettier at all, just `eslint --fix` on pre-push and post-commit.
+          oxfmt_house = (function()
+            local base = require("conform.formatters.oxfmt")
+            local house = vim.tbl_deep_extend("force", base, {
+              -- A static list, not base.args plus insertions the way
+              -- prettier_house built its argv: oxfmt's built-in args are exactly
+              -- { "--stdin-filepath", "$FILENAME" }, so there is nothing to
+              -- inherit, and spelling the whole argv out keeps the config path
+              -- visible next to the flag that disables the search for any other.
+              --
+              -- --disable-nested-config is the load-bearing one. Without it
+              -- oxfmt still looks for .oxfmtrc.json in subdirectories of the
+              -- working directory and merges what it finds, so a project
+              -- carrying its own would partially override the house style on
+              -- some files and not others. A project that HAS one is routed to
+              -- the plain built-in instead (see has_oxfmt_config above), which
+              -- is the only place a project config should win.
+              args = {
+                "-c", vim.fn.stdpath("config") .. "/.oxfmtrc.json",
+                "--disable-nested-config",
+                "--stdin-filepath", "$FILENAME",
+              },
             })
+            -- The built-in resolves cwd by searching for the config files it
+            -- would read, which is exactly what -c overrides — and it counts
+            -- vite.config.ts, so a Vite project would run this formatter from a
+            -- directory chosen for a config it is being told to ignore. Nil is
+            -- what the prettier built-in does: run in the buffer's directory.
+            -- Assigned after the extend because tbl_deep_extend drops nil.
+            house.cwd = nil
+            return house
           end)(),
         },
       })

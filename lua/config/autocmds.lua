@@ -47,9 +47,9 @@ autocmd("FileType", {
 })
 
 -- JS/TS: 2-space soft tabs and a 120-column guide, matching what this IDE
--- formats them to (prettier_house in lua/plugins/editor.lua, and Prettier's own
--- defaults in any project that brings its own config — prettier writes spaces
--- unless a project asks for tabs). Without this they inherit the global 4-wide
+-- formats them to (oxfmt_house in lua/plugins/editor.lua, and Prettier's own
+-- defaults in any project that brings its own config — both formatters write
+-- spaces unless a project asks for tabs). Without this they inherit the global 4-wide
 -- hard tabs from lua/config/options.lua, so every line typed by hand got
 -- re-indented the moment format-on-save ran, and the colorcolumn sat at the
 -- wrong width. Separate from yaml_spaces above rather than folded into it: the

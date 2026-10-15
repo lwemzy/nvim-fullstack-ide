@@ -36,14 +36,15 @@ end
 ---Separate from M.enabled because the two do different jobs on the same save and
 ---only one of them is a formatter. eslint --fix sorts imports, drops unused
 ---variables and applies every other autofixable rule in the project's eslint
----config; prettier reprints the file. They also run at different times —
+---config; the formatter reprints the file. They also run at different times —
 ---LspEslintFixAll on BufWritePre (lua/plugins/lsp.lua), conform on BufWritePost
----(lua/plugins/editor.lua) — so prettier runs LAST and wins any disagreement.
----That is mostly invisible, but not always: commerce-api's
+---(lua/plugins/editor.lua) — so the formatter runs LAST and wins any
+---disagreement. That is mostly invisible, but not always: commerce-api's
 ---`space-before-function-paren: never` wants `async(item, ctx)` and no
----Prettier-compatible formatter will write that, so eslint fixes it and prettier
----puts the space straight back on every save. Turning just this half off is the
----way out of that loop without losing format-on-save.
+---Prettier-compatible formatter will write that (oxfmt and prettier both put the
+---space back), so eslint fixes it and the formatter undoes it on every save.
+---Turning just this half off is the way out of that loop without losing
+---format-on-save.
 ---
 ---Precedence mirrors M.enabled, with one addition at the end: unset falls
 ---through to format-on-save rather than to `true`. So <leader>uf still switches

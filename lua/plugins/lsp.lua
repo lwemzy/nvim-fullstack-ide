@@ -86,10 +86,11 @@ return {
     dependencies = { "williamboman/mason.nvim" },
     config = function()
       require("mason-tool-installer").setup({
-        -- plain prettier (not just prettierd): the daemon doesn't accept
-        -- ad-hoc CLI overrides, needed for the Google-style fallback in
-        -- plugins/editor.lua's conform.nvim config.
-        ensure_installed = { "prettierd", "prettier", "vscode-spring-boot-tools" },
+        -- oxfmt runs the house JS/TS style (the oxfmt_house fallback in
+        -- plugins/editor.lua); prettierd and plain prettier still format
+        -- JSON/CSS/YAML/HTML/Markdown and any project that ships a prettier
+        -- config of its own, so all three are needed, not two.
+        ensure_installed = { "oxfmt", "prettierd", "prettier", "vscode-spring-boot-tools" },
         run_on_start = true,
       })
       -- Called by hand because VeryLazy is after VimEnter. run_on_start is invoked

@@ -262,7 +262,7 @@ describe("config.autocmds", function()
         assert.is_true(vim.bo[buf].expandtab)
         assert.equals(2, vim.bo[buf].tabstop)
         assert.equals(2, vim.bo[buf].shiftwidth)
-        -- 120, matching --print-width=120 in prettier_house. A different number
+        -- 120, matching printWidth in the house .oxfmtrc.json. A different number
         -- here draws the guide where the formatter does not wrap.
         assert.equals("120", vim.wo.colorcolumn)
       end)

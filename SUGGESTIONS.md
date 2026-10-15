@@ -27,6 +27,7 @@ because the reasoning is the part worth not repeating.
 | 11 | `Trouble symbols` outline sidebar (SpaceVim `tagbar`) | **Adopted.** One keymap, `<leader>lo`, gated on `textDocument/documentSymbol`. No new plugin. |
 | 12 | Task picker with auto-detection (SpaceVim tasks) | **Adopted.** `lua/config/tasks.lua`, on `<leader>rt`. Gradle discovery is async with an on-disk cache keyed on the build files, as the condition below required. |
 | 13 | `mbbill/undotree` | **Adopted.** `cmd`-triggered, `<leader>uu`. `g:undotree_*` in `init`, not `config` — the vimscript plugin reads them at source time. |
+| 14 | Vite+ / the Oxc toolchain (`oxfmt`, `oxlint`) | **Half adopted.** Vite+ itself is a paid Vite superset and buys nothing here, but `oxfmt` is a free MIT binary that reproduces the house prettier style byte-for-byte at a tenth of the CPU, and now runs the JS/TS fallback. `oxlint` **declined** — it cannot read the flat `eslint.config.mjs` the work repo's `pre-push` enforces. |
 
 ## What was actually slow
 
@@ -570,6 +571,47 @@ The original case for it:
 across sessions and then offers no way to look at it — `u`/`<C-r>` walk one
 branch of a tree. SpaceVim carries `vim-mundo`/`undotree` for exactly this.
 `cmd = "UndotreeToggle"` means it costs nothing until used.
+
+## 14. Vite+ and the Oxc toolchain — replace prettier and eslint?
+
+**Prompted by <https://viteplus.dev/>, and the headline answer is that Vite+ is
+not the thing to evaluate.** Vite+ is a commercial superset of Vite — dev server,
+monorepo task runner, test runner, bundled toolchain — sold per seat. It ships
+Oxc's formatter and linter, but both are free standalone MIT binaries (`oxfmt`,
+`oxlint`) published to npm and packaged in mason. Nothing an editor config wants
+from that page requires Vite+.
+
+**`oxfmt` adopted as the JS/TS fallback** (`lua/plugins/editor.lua`'s
+`oxfmt_house`, with the style in this repo's `.oxfmtrc.json`). Measured rather
+than assumed:
+
+* 60 real files from the work `commerce-api` repo (read-only, piped through
+  stdin, nothing in that repo touched) formatted with prettier + the five house
+  flags and with oxfmt + the equivalent `.oxfmtrc.json`: **byte-identical on all
+  60**, and on hand-written `.tsx`/`.jsx` cases covering JSX, generics and async
+  arrows. 63,913 bytes of source produced 67,223 bytes from both.
+* Five runs over the same file cost prettier 0.33s of CPU and oxfmt 0.03s. Since
+  formatting is async (`format_after_save`), this is machine load rather than
+  latency — the same style for roughly a tenth of the work.
+* The catch, and the reason this needed a config file: **oxfmt has no style CLI
+  options at all.** `oxfmt --help` lists mode, output, ignore and runtime flags
+  and nothing else, so the five house settings cannot be passed as arguments the
+  way they were to prettier. They live in `.oxfmtrc.json` at the root of this
+  config repo, passed with `-c`, plus `--disable-nested-config` so a stray config
+  in a subdirectory cannot merge over the top of it. A project that ships its own
+  oxfmt config is routed to the plain built-in instead, and a project with a
+  prettier config still gets prettier.
+* prettier and prettierd stay installed and stay in use: JSON, CSS, SCSS, LESS,
+  HTML, YAML and Markdown are not oxfmt's filetypes, and any project with its own
+  prettier config must keep being formatted by the tool its CI runs.
+
+**`oxlint` declined, and this is the firmer half of the conclusion.** It reads
+`.oxlintrc.json`, documented as compatible with *ESLint v8's* config format, and
+cannot read the flat `eslint.config.mjs` that `commerce-api` uses — while that
+repo's husky `pre-push` hook runs `yarn eslint`. Swapping the editor onto oxlint
+would mean the editor and the hook disagreeing about what passes, which is worse
+than the speed is good. `vscode-eslint-language-server` stays as the JS/TS
+linter, with its fix-on-save now separately switchable (`<leader>ul`).
 
 ## From SpaceVim, considered and declined
 

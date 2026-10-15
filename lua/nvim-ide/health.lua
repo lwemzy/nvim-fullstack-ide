@@ -189,17 +189,31 @@ end
 local function formatters()
   health.start("Formatters")
 
-  -- conform's JS/TS selection needs BOTH: prettierd for speed, and plain
-  -- prettier because the daemon rejects the ad-hoc CLI flags that carry the
-  -- house-style fallback (see lua/plugins/editor.lua). With only prettierd
-  -- installed, every JS/TS file with no project prettier config formats with
-  -- Prettier's stock double quotes and 80-column wrap instead.
-  for _, name in ipairs({ "prettierd", "prettier" }) do
+  -- conform's JS/TS selection needs all three: oxfmt runs the house-style
+  -- fallback, and prettierd/prettier still handle JSON/CSS/YAML/HTML/Markdown
+  -- and any project shipping its own prettier config (see
+  -- lua/plugins/editor.lua). A missing formatter is skipped silently by
+  -- conform, so without oxfmt every JS/TS file with no project config simply
+  -- stops being formatted on save, with nothing on screen to say why.
+  for _, name in ipairs({ "oxfmt", "prettierd", "prettier" }) do
     if vim.fn.executable(name) == 1 or vim.fn.executable(mason("bin/" .. name)) == 1 then
       health.ok(name .. " available")
     else
       health.warn(name .. " not found", { ":MasonInstall " .. name })
     end
+  end
+
+  -- The house style lives in a file rather than in CLI flags, because oxfmt has
+  -- no style options on its command line at all. Lose the file and oxfmt still
+  -- runs and still reports success — with its own defaults, i.e. double quotes
+  -- and an 80-column wrap, on every save.
+  local oxfmtrc = vim.fn.stdpath("config") .. "/.oxfmtrc.json"
+  if vim.fn.filereadable(oxfmtrc) == 1 then
+    health.ok("house oxfmt config present")
+  else
+    health.warn(".oxfmtrc.json missing — JS/TS falls back to oxfmt's own defaults", {
+      "restore it from the repo: " .. oxfmtrc,
+    })
   end
 
   local style = vim.fn.stdpath("config") .. "/java-google-style.xml"
