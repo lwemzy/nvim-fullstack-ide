@@ -600,7 +600,13 @@ describe("ftplugin/java.lua", function()
       H.track_client(srv.id)
       H.spy(vim.cmd, "edit")
 
-      local stopped = H.spy(vim.lsp, "stop_client")
+      -- The client's own :stop, not vim.lsp.stop_client: that free function is
+      -- deprecated since 0.11 and gone in 0.13, so JdtlsClean force-stops each
+      -- client object it already has. Spying on the instance (rather than on
+      -- vim.lsp.Client) keeps the stub to this one fake, and not calling
+      -- through is the point — the client stays attached, so the assertions
+      -- below observe a wipe that correctly has NOT happened yet.
+      local stopped = H.spy(srv.client, "stop")
       H.capture_notifications(function()
         vim.cmd("JdtlsClean")
         vim.wait(100)

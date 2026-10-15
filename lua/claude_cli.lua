@@ -249,7 +249,12 @@ local function create_terminal_buf()
   -- spawn (a dangling shim, a permissions bit, an exec-format error), and the
   -- scratch buffer above has to be cleaned up if it does.
   local spawned = pcall(vim.api.nvim_buf_call, buf, function()
-    vim.fn.termopen(cmd, {
+    -- jobstart({ term = true }), not termopen: the latter is deprecated since
+    -- 0.11 and goes away in 0.13. Same semantics — it still has to run inside
+    -- nvim_buf_call, because the terminal is attached to whichever buffer is
+    -- current when the job starts.
+    vim.fn.jobstart(cmd, {
+      term = true,
       env = { EDITOR = "nvim", VISUAL = "nvim" },
       on_exit = function()
         -- `claude` exiting — /exit, Ctrl-D, a crash, an auth timeout — used to

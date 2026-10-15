@@ -4,7 +4,9 @@ local autocmd = vim.api.nvim_create_autocmd
 -- Highlight yanked text briefly
 autocmd("TextYankPost", {
   group = augroup("highlight_yank", { clear = true }),
-  callback = function() vim.highlight.on_yank() end,
+  -- vim.hl, not vim.highlight: the old name is deprecated since 0.11 and slated
+  -- for removal in 0.13.
+  callback = function() vim.hl.on_yank() end,
 })
 
 -- Restore cursor position on file open

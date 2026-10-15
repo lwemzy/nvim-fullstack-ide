@@ -575,7 +575,10 @@ vim.api.nvim_create_user_command("JdtlsClean", function()
   -- Fail-safe in case a detach event is missed
   vim.defer_fn(finish, 8000)
 
-  vim.lsp.stop_client(clients, true)  -- true = force
+  -- client:stop(true), not vim.lsp.stop_client(clients, true): the latter is
+  -- deprecated since 0.11 and removed in 0.13. get_clients already handed us
+  -- client objects, so this is the same force-stop one client at a time.
+  for _, c in ipairs(clients) do c:stop(true) end
 end, { desc = "Clear jdtls workspace and restart" })
 
 vim.keymap.set("n", "<leader>jc", "<cmd>JdtlsClean<CR>", { buffer = true, desc = "Java: Clean & restart jdtls" })

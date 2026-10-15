@@ -2,8 +2,10 @@
 -- persistent terminal panel).
 --
 -- The one absolute rule here: nothing in this spec may spawn a process or touch
--- the real context file. vim.fn.jobstart and vim.fn.termopen are spied on every
--- path that would launch `claude`, and the assertions are made on the argv that
+-- the real context file. vim.fn.jobstart is spied on every path that would
+-- launch `claude` — one-shot prompts and the panel alike, the panel being a
+-- jobstart({ term = true }) now that vim.fn.termopen is deprecated (0.11) and
+-- slated for removal (0.13) — and the assertions are made on the argv that
 -- *would* have been passed — which is also the only part of the integration
 -- that can silently rot (a renamed flag looks identical to a working panel
 -- until you try to use it, and the MCP registration spent its whole life
@@ -189,9 +191,8 @@ describe("claude_cli", function()
     -- Spied unconditionally, including for cases that are not about M.ask: an
     -- accidental real jobstart would launch the user's `claude` from a test.
     jobs = H.spy(vim.fn, "jobstart", function() return 1 end)
-    H.spy(vim.fn, "termopen", function() return 1 end)
     -- The module now refuses to start anything when the CLI is absent, which is
-    -- correct — both jobstart and termopen *throw* E475 for a missing binary — but
+    -- correct — jobstart *throws* E475 for a missing binary — but
     -- it means every case here would otherwise pass or fail based on whether the
     -- machine running the suite happens to have `claude` on $PATH. The cases that
     -- are about the missing-CLI path stub this the other way round.
@@ -264,7 +265,7 @@ describe("claude_cli", function()
   --- Open and dismiss the panel, which is what arms the BufEnter context sync.
   --- The MCP server is the only reader of the context file and only exists once
   --- the panel does, so the module deliberately writes nothing before that first
-  --- toggle — a case about the *content* has to get past that gate. termopen is
+  --- toggle — a case about the *content* has to get past that gate. jobstart is
   --- already spied, so no process is launched.
   local function arm_context_sync()
     claude.toggle_chat()
@@ -932,7 +933,10 @@ describe("claude_cli", function()
     local terms
 
     before_each(function()
-      terms = H.spy(vim.fn, "termopen", function() return 1 end)
+      -- The panel's terminal is jobstart({ term = true }) — vim.fn.termopen is
+      -- deprecated since 0.11 and goes away in 0.13. Re-spied inside this
+      -- block so `terms` counts the panel's spawns only, never a prompt's.
+      terms = H.spy(vim.fn, "jobstart", function() return 1 end)
       capture_ctx()
       claude = fresh_claude()
     end)
@@ -981,6 +985,11 @@ describe("claude_cli", function()
       -- $EDITOR inside the panel must be nvim, not whatever the parent shell
       -- exported, or `claude` opens a nested editor the user cannot see.
       assert.same({ EDITOR = "nvim", VISUAL = "nvim" }, terms[1][2].env)
+      -- term = true is what makes this a terminal job rather than a background
+      -- one. Drop it and jobstart still succeeds and the panel still opens —
+      -- onto an empty scratch buffer, with claude running where you cannot see
+      -- it and no way to type at it.
+      assert.is_true(terms[1][2].term)
     end)
 
     it("still opens a working panel on a machine with no python3", function()
@@ -1005,7 +1014,7 @@ describe("claude_cli", function()
     end)
 
     it("does not open a panel or leak a buffer when the claude CLI is missing", function()
-      -- termopen throws E475 for a missing binary, and the scratch buffer is
+      -- jobstart throws E475 for a missing binary, and the scratch buffer is
       -- created before it, so the throw used to leave one behind on every attempt
       -- — unlisted, so nothing showed they were piling up.
       H.stub(vim.fn, "executable", function() return 0 end)
@@ -1117,7 +1126,7 @@ describe("claude_cli", function()
       local win = vim.api.nvim_get_current_win()
       local before = #vim.api.nvim_list_wins()
 
-      -- The on_exit termopen was handed, invoked the way the job would.
+      -- The on_exit the job was handed, invoked the way the job would.
       terms[1][2].on_exit(1, 0, "exit")
       vim.wait(200, function() return not vim.api.nvim_buf_is_valid(buf) end)
 
@@ -1167,7 +1176,7 @@ describe("claude_cli", function()
       -- Entering the panel must not overwrite the record of the file you were
       -- editing — that record is the whole point of the panel.
       assert.equals(0, #writes)
-      -- termopen is spied, so this buffer is not a real terminal: 'buftype' is
+      -- jobstart is spied, so this buffer is not a real terminal: 'buftype' is
       -- "nofile" rather than "terminal", non-empty either way, which is what makes
       -- the guard right for the real thing too ('buftype' cannot be set to
       -- "terminal" by hand — E474 — so a spec cannot fake one more closely).
