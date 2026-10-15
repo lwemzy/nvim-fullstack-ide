@@ -97,6 +97,10 @@ local MAPPINGS = {
   -- Format.
   { "n", "<M-l>", "Format file" },
   { "n", "<leader>uf", "Toggle format on save" },
+  -- The other half of save-time rewriting: eslint --fix runs on BufWritePre and
+  -- prettier on BufWritePost, so they can churn the same character on every
+  -- save. See lua/config/format.lua's M.lint_fix_enabled.
+  { "n", "<leader>ul", "Toggle eslint fix on save" },
 
   -- LSP actions.
   { "n", "<F2>", "Rename symbol" },

@@ -83,6 +83,14 @@ end, { desc = "Format file" })
 map("n", "<leader>uf", function()
   require("config.format").toggle()
 end, { desc = "Toggle format on save" })
+-- The other half of save-time rewriting, for JS/TS only: eslint --fix runs on
+-- BufWritePre and prettier on BufWritePost, so prettier wins wherever they
+-- disagree and the pair can churn the same character on every save. This turns
+-- off the lint autofix (import sorting, unused vars) and keeps formatting;
+-- leader+uf still turns off both.
+map("n", "<leader>ul", function()
+  require("config.format").toggle_lint_fix()
+end, { desc = "Toggle eslint fix on save" })
 
 -- ── LSP actions ───────────────────────────────────────────────────────────
 map("n", "<F2>",  vim.lsp.buf.rename,                   { desc = "Rename symbol" })

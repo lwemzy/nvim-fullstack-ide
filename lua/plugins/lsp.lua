@@ -636,15 +636,18 @@ return {
             group = group,
             buffer = bufnr,
             callback = function()
-              -- Same switch as conform's format_after_save in
-              -- lua/plugins/editor.lua: eslint --fix rewrites the buffer on
-              -- save, so if this ignored the toggle then turning format-on-save
-              -- off would still leave JS and TS files reformatting themselves —
-              -- the one place the setting would look broken. It is a lint
-              -- autofix rather than a formatter, so if the import-sorting and
-              -- unused-var fixes are ever wanted independently of prettier,
-              -- give this its own flag rather than splitting config.format.
-              if not require("config.format").enabled(bufnr) then return end
+              -- lint_fix_enabled, not enabled: this is a lint autofix rather
+              -- than a formatter, and it now has its own switch (<leader>ul)
+              -- that defaults to following format-on-save. The reason it needed
+              -- one is the ordering — this hook is BufWritePre and conform's
+              -- format_after_save is BufWritePost, so prettier runs last and
+              -- wins every disagreement. Where the project's eslint config
+              -- enforces something no Prettier-compatible formatter will write
+              -- (`space-before-function-paren: never`, say), the two rewrite the
+              -- same character back and forth on every single save, and the only
+              -- way out used to be giving up format-on-save entirely. See
+              -- lua/config/format.lua.
+              if not require("config.format").lint_fix_enabled(bufnr) then return end
               pcall(vim.cmd, "LspEslintFixAll")
             end,
           })

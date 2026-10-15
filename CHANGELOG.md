@@ -7,7 +7,11 @@ same commit.
 
 ## 2026-10-15
 
-- **Replace three Neovim APIs that are removed in 0.13**
+- **Give eslint's fix-on-save its own toggle, `<leader>ul`**
+  - eslint `--fix` runs on BufWritePre and conform runs on BufWritePost, so prettier goes last and wins every disagreement between them. Where a project's eslint config enforces something no Prettier-compatible formatter will write — commerce-api's `space-before-function-paren: never` wants `async(item, ctx)` — the two rewrite the same character back and forth on every save, and the only escape was giving up format-on-save entirely with `<leader>uf`.
+  - `config.format` now carries a second switch, `lint_fix_enabled`, which defaults to following format-on-save. So `<leader>uf` still turns off both (otherwise turning format-on-save off would leave JS/TS files still rewriting themselves on save — the one place the setting would look broken), while `<leader>ul` turns off only the lint autofix and keeps prettier.
+  - `toggle_lint_fix` reports the *effective* state: with the lint flag on but format-on-save off, the autofix is still off, and saying "enabled" there would be a lie.
+- **Replace three Neovim APIs that are removed in 0.13** (`d348e4c`)
   - `vim.highlight.on_yank` (yank flash), `vim.fn.termopen` (the Claude panel's terminal) and `vim.lsp.stop_client` (`:JdtlsClean`) are all deprecated since 0.11 and scheduled for removal in 0.13. Each still works today and each would have failed on the first nightly after removal, in three unrelated places, with nothing in the suite to say why.
   - Now `vim.hl.on_yank()`, `vim.fn.jobstart(cmd, { term = true, … })` (still inside `nvim_buf_call` — the terminal attaches to whatever buffer is current when the job starts), and `client:stop(true)` per client, since `get_clients` already hands back client objects.
   - The panel specs transcribed `termopen` as the spy target, so they would have gone green against a panel that no longer opened. They now spy `jobstart` and additionally assert `term = true` is passed: drop that one field and `jobstart` still succeeds and the panel still opens — onto an empty scratch buffer, with `claude` running where you cannot see it. `java_ftplugin_spec.lua` spies the client instance's own `:stop` for the same reason.
