@@ -5,6 +5,15 @@ full git history on 2026-10-09, then maintained going forward — see
 CLAUDE.md: every commit that changes behavior gets an entry here in the
 same commit.
 
+## 2026-10-15
+
+- **Start the Spring Boot language server again, gated without a root_dir wrapper**
+  - `8ebe50f` (2026-10-09) gated boot-ls to real Spring Boot projects by wrapping `server.root_dir` in a function. That broke boot-ls everywhere, including in Spring projects. spring-boot.nvim's `launch.update_ls_config` only substitutes its own root when `root_dir` is falsy, so the wrapper function survived into `client_config.init_options.workspaceFolders = client_config.root_dir` (launch.lua:78) and the `initialize` request died in the JSON encoder: `vim/lsp/rpc.lua:269: Cannot serialise function: type not supported`. Every `.java` and `application.properties` buffer threw that on BufReadPost, boot-ls never attached, and each session leaked one orphaned JVM — the process spawns before `initialize` fails, so nvim never tracks it and never stops it.
+  - The plugin's own `M.root_dir` also takes no arguments and *returns* the root instead of calling `on_dir`, so it is not a `vim.lsp.config` root_dir callback at all. There is no correct wrapper to write.
+  - Gate it from the outside instead: `autocmd = false` to stop the plugin starting boot-ls on every `.java` file unconditionally, plus our own `spring_boot_ls_gated` FileType autocmd that checks `project.declares_spring_boot` for `java` only (yaml/jproperties still get completion outside a confirmed Spring project, as before). `launch.start`/`update_ls_config` read the *current* buffer rather than one passed in, so the call is wrapped in `nvim_buf_call` — otherwise a Spring file that gets a FileType while unfocused (session restore, `:bufdo`, quickfix population, `config.file_ops`' bufload) starts boot-ls with another buffer's root and file URI.
+  - lazy.nvim runs this config function *in response to* the FileType that loaded the plugin, and that event is not replayed for an autocmd registered during it — so the buffer you opened to trigger the load is started explicitly.
+  - project_gating_spec.lua's spring-boot tests ran green against the broken config because they stubbed the plugin's launch module, which the real code path no longer goes through. They now drive the real `spring_boot_ls_gated` autocmd with `vim.lsp.start` stubbed, no longer skip (15/15, 0 skipped), and one new case JSON-encodes the resolved client config so a non-serialisable field fails the suite instead of only the editor.
+
 ## 2026-10-09
 
 - **Fix the spring-boot.nvim crash and quiet harper_ls** (`8ebe50f`)

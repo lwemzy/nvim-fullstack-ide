@@ -43,22 +43,33 @@ return {
       -- saying so itself) is still read correctly.
       local project = require("config.project")
 
-      require("spring_boot").setup({
+      local resolved_opts = require("spring_boot").setup({
         java_cmd = java_cmd,
+        -- autocmd=false: the plugin's own FileType autocmd starts boot-ls on
+        -- *every* .java file unconditionally (it only filename-gates .yaml/
+        -- .jproperties, checking they are actually application.yml/
+        -- application.properties — nothing gates .java on whether the project
+        -- even has Spring Boot as a dependency). Register our own below
+        -- instead, adding that check specifically for .java.
+        --
+        -- This is NOT a `server.root_dir` wrapper, which is the obvious-looking
+        -- alternative and is broken against this plugin. spring_boot.launch
+        -- still exposes the pre-native-LSP API (update_ls_config/start/
+        -- ls_autocmd) as of 98c6ff1, upstream main's tip, and
+        -- update_ls_config only substitutes its own root when root_dir is
+        -- falsy — so a function survives into
+        --   client_config.init_options.workspaceFolders = client_config.root_dir
+        -- (launch.lua:78) and the initialize request dies in the JSON encoder:
+        --   vim/lsp/rpc.lua:269: Cannot serialise function: type not supported
+        -- Verified: every .java and application.properties file in a Spring
+        -- project threw that on BufReadPost, boot-ls never attached, and each
+        -- session leaked one orphaned JVM (the process spawns before
+        -- initialize fails, so nvim never tracks it and never stops it).
+        -- Its M.root_dir also takes no arguments and *returns* the root
+        -- instead of calling on_dir, so it cannot serve as a vim.lsp.config
+        -- root_dir callback either.
+        autocmd = false,
         server = {
-          -- The plugin's own root_dir (spring_boot.launch.root_dir) already
-          -- filename-gates .yaml/.jproperties (only application.yml /
-          -- application.properties) but starts boot-ls for *every* .java
-          -- file unconditionally. Wrap it to add the Spring Boot check
-          -- specifically for .java — deliberately NOT applied to yaml/
-          -- jproperties, which still deserve completion even outside a
-          -- confirmed Spring Boot project.
-          root_dir = function(bufnr, on_dir)
-            if vim.bo[bufnr].filetype == "java" and not project.declares_spring_boot(bufnr) then
-              return
-            end
-            require("spring_boot.launch").root_dir(bufnr, on_dir)
-          end,
           -- barbecue.nvim (winbar breadcrumbs) auto-attaches nvim-navic to
           -- any client advertising documentSymbolProvider, with no way to
           -- exclude a client by name. jdtls already claims that capability
@@ -73,11 +84,43 @@ return {
           end,
         },
       })
-      -- No manual "start for the current buffer" call needed: setup() calls
-      -- vim.lsp.enable("spring-boot") (auto_enable defaults true), and
-      -- vim.lsp.enable() itself re-triggers FileType for already-open
-      -- buffers when did_filetype() is true — exactly the buffer that
-      -- lazy-loaded this plugin in the first place.
+      if not resolved_opts then return end -- boot-ls jar not installed; setup() already warned
+
+      local function maybe_start(bufnr)
+        if not vim.api.nvim_buf_is_valid(bufnr) then return end
+        if vim.bo[bufnr].filetype == "java" and not project.declares_spring_boot(bufnr) then
+          return
+        end
+        local launch = require("spring_boot.launch")
+        -- nvim_buf_call, because neither function reads the buffer it is about:
+        -- launch.update_ls_config derives root_dir from vim.fs.root(0, ...) and
+        -- launch.start calls nvim_get_current_buf()/vim.uri_from_bufnr itself
+        -- (launch.lua:9 and :102-103). Passing bufnr around is not enough — it
+        -- has to actually BE the current buffer while they run, or a Spring file
+        -- that gets a FileType while not focused (session restore, :bufdo,
+        -- quickfix population, the bufload in config.file_ops) starts boot-ls
+        -- with another buffer's root and another buffer's file URI.
+        --
+        -- update_ls_config per call rather than once: setup()'s return value has
+        -- no cmd/root_dir, and root_dir must be recomputed per buffer anyway.
+        -- Skipping it passes cmd=nil to vim.lsp.start, which just no-ops.
+        vim.api.nvim_buf_call(bufnr, function()
+          launch.start(launch.update_ls_config(resolved_opts))
+        end)
+      end
+
+      -- Handle every *future* java/yaml/jproperties buffer...
+      vim.api.nvim_create_autocmd("FileType", {
+        group = vim.api.nvim_create_augroup("spring_boot_ls_gated", { clear = true }),
+        pattern = { "java", "yaml", "jproperties" },
+        callback = function(ev) maybe_start(ev.buf) end,
+      })
+      -- ...and the current one too: lazy.nvim loads this plugin (running this
+      -- whole config function) *in response to* FileType already firing for the
+      -- buffer that triggered it. That event is not replayed for an autocmd only
+      -- just registered above, so without this the very file you opened to
+      -- trigger the ft=java/yaml load never gets boot-ls started.
+      maybe_start(vim.api.nvim_get_current_buf())
     end,
   },
 }
