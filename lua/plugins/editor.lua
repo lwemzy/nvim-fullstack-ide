@@ -214,6 +214,55 @@ return {
     },
   },
 
+  -- Staging and committing: one buffer showing staged, unstaged and unpushed
+  -- at once, which is the thing gitsigns and diffview together still do not
+  -- give you. gitsigns stages the hunk under the cursor in the file you are
+  -- editing, diffview reviews a revision range — neither answers "what is
+  -- about to go into this commit, and what is not".
+  {
+    "NeogitOrg/neogit",
+    dependencies = { "nvim-lua/plenary.nvim" },
+    cmd = "Neogit",
+    keys = {
+      { "<leader>gg", "<cmd>Neogit<CR>", desc = "Git: Neogit status" },
+    },
+    opts = {
+      -- Both default to nil, which means auto-detect: neogit runs
+      -- `pcall(require, name)` (its config.lua: check_integration) and takes
+      -- the answer. That does work here even though both plugins are lazy —
+      -- lazy.nvim hooks `require`, so the pcall loads them — which is why
+      -- neither has to be a dependency. Pinned anyway, because auto-detect
+      -- answers "whatever is installed" rather than "what this config
+      -- chose": install fzf-lua or snacks for any unrelated reason and the
+      -- branch picker silently stops being telescope (finder.lua checks the
+      -- integrations in a fixed order), and add codediff and the diff stops
+      -- being the diffview this file spends fifty lines configuring.
+      integrations = {
+        telescope = true,
+        diffview  = true,
+      },
+      -- The other half of that: `diff_viewer` is the explicit version of the
+      -- same choice, and the only one neogit checks before auto-detecting
+      -- (config.lua: get_diff_viewer). So `d` on a file in the status buffer
+      -- opens the hatched, dimmed, diagnostic-free diff configured above.
+      diff_viewer = "diffview",
+      -- The fold chevrons diffview uses (its config.lua: signs.fold_closed /
+      -- fold_open) instead of neogit's `>`/`v`, so an expandable row looks
+      -- the same in both git UIs. `hunk` is left alone: it defaults to two
+      -- empty strings, and a chevron on every hunk header is noise rather
+      -- than consistency — diffview has no hunk-level fold to match.
+      signs = {
+        item    = { "", "" },
+        section = { "", "" },
+      },
+      -- Box-drawing characters for the commit graph rather than ASCII
+      -- `|`/`/`/`\`. Pure rendering, no external tool: neogit draws the graph
+      -- itself from `git log`. The terminal here is already running a Nerd
+      -- Font for devicons, so the glyphs are safe.
+      graph_style = "unicode",
+    },
+  },
+
   -- Formatter
   {
     "stevearc/conform.nvim",

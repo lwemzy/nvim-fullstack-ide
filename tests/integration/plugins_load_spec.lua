@@ -53,6 +53,7 @@ local PLUGIN_COMMANDS = {
   { cmd = "TodoTelescope", plugin = "todo-comments.nvim" },
   { cmd = "DiffviewOpen", plugin = "diffview.nvim" },
   { cmd = "DiffviewFileHistory", plugin = "diffview.nvim" },
+  { cmd = "Neogit", plugin = "neogit" },
   { cmd = "RenderMarkdown", plugin = "render-markdown.nvim" },
   { cmd = "GrugFar", plugin = "grug-far.nvim" },
   { cmd = "Neotest", plugin = "neotest" },
