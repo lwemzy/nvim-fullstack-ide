@@ -162,6 +162,43 @@ describe("config.options", function()
     end)
   end)
 
+  describe("diffs", function()
+    -- These are read by three things, which is why they are global rather than
+    -- part of diffview's spec: diffview, gitsigns' diffthis (<leader>gd) and
+    -- plain :diffsplit.
+    it("fills the empty side of a hunk with hatching, not a band of dashes", function()
+      -- The default is `diff:-`, which draws twenty-odd dashes across the pane
+      -- wherever one side has no line — the loudest thing on screen in a
+      -- side-by-side diff. Asserted as a key lookup rather than against the
+      -- whole option: other plugins append their own fillchars items (nvim-ufo
+      -- adds `fold:`), so the full value is not this config's to own.
+      assert.equals("╱", vim.opt.fillchars:get().diff)
+    end)
+
+    it("raises linematch above Neovim's default of 40", function()
+      -- linematch is what pairs a changed line with its counterpart so the
+      -- two sides align and inline:char can highlight just the differing
+      -- words. Past the limit it gives up entirely, and real hunks in JS/TS
+      -- files pass 40 lines routinely.
+      local dopt = vim.opt.diffopt:get()
+      assert.is_true(vim.tbl_contains(dopt, "linematch:60"),
+        "linematch:60 missing from diffopt: " .. vim.o.diffopt)
+      assert.is_false(vim.tbl_contains(dopt, "linematch:40"))
+    end)
+
+    it("keeps the pieces the rest of the diff rendering depends on", function()
+      -- inline:char is what enhanced_diff_hl in diffview's spec has to
+      -- highlight; histogram is what stops a moved block being reported as an
+      -- unrelated add and delete; vertical makes :diffsplit and gitsigns'
+      -- diffthis open left/right like diffview already does.
+      local dopt = vim.opt.diffopt:get()
+      for _, want in ipairs({ "internal", "filler", "inline:char", "algorithm:histogram", "vertical" }) do
+        assert.is_true(vim.tbl_contains(dopt, want),
+          want .. " missing from diffopt: " .. vim.o.diffopt)
+      end
+    end)
+  end)
+
   describe("indentation", function()
     it("uses hard tabs four columns wide, consistently", function()
       -- tabstop and shiftwidth have to agree: if they differ, `>>` and a
@@ -314,7 +351,7 @@ describe("config.options", function()
         "wrap", "list", "listchars", "tabstop", "shiftwidth", "expandtab",
         "smartindent", "ignorecase", "smartcase", "incsearch", "hlsearch",
         "undofile", "undodir", "swapfile", "backup", "autoread", "fileencoding",
-        "splitright", "splitbelow", "clipboard",
+        "splitright", "splitbelow", "clipboard", "diffopt", "fillchars",
       }
       local before = {}
       for _, name in ipairs(names) do before[name] = vim.o[name] end

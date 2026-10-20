@@ -312,4 +312,72 @@ describe("booted config", function()
       assert.equals("rounded", lazy_config.options.ui.border)
     end)
   end)
+
+  describe("diffview's rendering options", function()
+    -- diffview merges user opts with vim.tbl_deep_extend (its config.lua:
+    -- M.setup), which accepts a key it has never heard of and keeps it. A
+    -- renamed or misspelled option therefore raises nothing anywhere — the
+    -- diff just renders the stock way, which is the thing these options exist
+    -- to stop. Reading the merged config back is the only check that catches
+    -- it. Loaded explicitly rather than leaning on the force-loading block
+    -- above having run first.
+    local cached
+
+    --- The merged config, loading diffview the first time it is asked for.
+    --- A function rather than a before_each because the load only needs to
+    --- happen once and plenary's busted has no `setup`.
+    local function cfg()
+      if not cached then
+        require("lazy").load({ plugins = { "diffview.nvim" } })
+        cached = require("diffview.config").get_config()
+      end
+      return cached
+    end
+
+    it("dims unchanged text so diffopt's inline:char has something to show", function()
+      -- The two halves are useless apart: inline:char marks which characters
+      -- in a changed line differ, and without the dimming every character
+      -- around them is the same brightness.
+      assert.is_true(cfg().enhanced_diff_hl)
+    end)
+
+    it("turns diagnostics off in both diff views, not only the merge tool", function()
+      -- A diagnostic in a diff is a false positive by construction: harper_ls
+      -- grammar-checks the prose in comments, and every other server is
+      -- reporting against a revision that is not the file on disk.
+      assert.is_true(cfg().view.default.disable_diagnostics)
+      assert.is_true(cfg().view.file_history.disable_diagnostics)
+    end)
+
+    it("leaves winbar_info off, because barbecue owns the winbar", function()
+      -- Not an oversight, and the reason is recorded in lua/plugins/editor.lua:
+      -- barbecue rewrites the winbar of every buftype-"" window on CursorMoved
+      -- and can only be excluded by buftype or filetype (barbecue/ui.lua:
+      -- M.update), neither of which distinguishes a diff buffer from the file
+      -- it came from. Asserted so switching it on has to go past this comment.
+      assert.is_false(cfg().view.default.winbar_info)
+    end)
+
+    it("overrides one tree option without dropping the rest", function()
+      -- The point of passing a partial table: tree_options also carries
+      -- flatten_dirs, and a shallow merge would take it away.
+      assert.equals("always", cfg().file_panel.tree_options.folder_statuses)
+      assert.is_true(cfg().file_panel.tree_options.flatten_dirs)
+    end)
+
+    it("hides whitespace marks in a diff buffer", function()
+      assert.is_function(cfg().hooks.diff_buf_read)
+      -- Run the hook rather than only asserting it exists. `list` is on
+      -- globally (lua/config/options.lua), so a hook that stopped taking
+      -- effect would be invisible except as » and · painted through the diff.
+      local buf = vim.api.nvim_create_buf(false, true)
+      vim.cmd("split")
+      vim.api.nvim_win_set_buf(0, buf)
+      vim.wo.list = true
+      cfg().hooks.diff_buf_read(buf)
+      local list_after = vim.wo.list
+      vim.cmd("close")
+      assert.is_false(list_after)
+    end)
+  end)
 end)

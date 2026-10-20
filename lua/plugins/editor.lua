@@ -162,6 +162,56 @@ return {
       { "<leader>gv", "<cmd>DiffviewOpen<CR>",         desc = "Git: Diff view" },
       { "<leader>gh", "<cmd>DiffviewFileHistory<CR>",  desc = "Git: File history" },
     },
+    -- Every key below is a default being overridden. Stock diffview renders a
+    -- diff like a text buffer that happens to be in diff mode — linted,
+    -- whitespace-marked, with unchanged text as bright as changed text — rather
+    -- than like something built to be read. The gap filler and the line
+    -- matching are deliberately NOT here but in lua/config/options.lua, since
+    -- gitsigns' diffthis and :diffsplit need them too.
+    opts = {
+      -- Dims unchanged text and strengthens the changed-text highlight, so a
+      -- one-word change inside a long line is findable. Off by default — and
+      -- without it `inline:char` from diffopt has nothing visible to show,
+      -- which is why the two settings only make sense together.
+      enhanced_diff_hl = true,
+      view = {
+        -- Diagnostics in a diff are all false positives by construction:
+        -- harper_ls grammar-checks the prose in comments, and every other
+        -- server is reporting on a revision that is not the file on disk, so
+        -- the squiggles land on lines nobody is editing. diffview already
+        -- does this for the 3-way merge tool, just not for these two views.
+        --
+        -- `winbar_info = true` is deliberately NOT set, though it is the
+        -- obvious thing to want here: it would label each pane with the
+        -- revision it is showing. It cannot work in this config. barbecue
+        -- (lua/plugins/tools.lua) owns the winbar of every window whose
+        -- buffer has buftype "", and its only opt-outs are buftype and
+        -- filetype (barbecue/ui.lua: M.update) — diffview's diff buffers are
+        -- buftype "" with the file's real filetype, so excluding them would
+        -- mean excluding every javascript/java/lua buffer everywhere. It
+        -- re-renders on CursorMoved too, so writing the winbar from a hook
+        -- loses the next time the cursor moves. The revision range is on the
+        -- first line of the file panel instead.
+        default      = { disable_diagnostics = true },
+        file_history = { disable_diagnostics = true },
+      },
+      file_panel = {
+        tree_options = {
+          -- Each folder keeps its change status permanently instead of only
+          -- while folded, so the tree answers "what changed under here"
+          -- without having to be collapsed first.
+          folder_statuses = "always",
+        },
+      },
+      hooks = {
+        -- `list` is on globally (lua/config/options.lua) and paints » and ·
+        -- through the whole diff. Whitespace marks earn their place in a
+        -- buffer being edited; these are not editable.
+        diff_buf_read = function()
+          vim.opt_local.list = false
+        end,
+      },
+    },
   },
 
   -- Formatter

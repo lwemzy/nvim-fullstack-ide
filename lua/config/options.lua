@@ -72,4 +72,35 @@ opt.ignorecase = true
 opt.smartcase = true
 opt.list = true
 opt.listchars = { tab = "» ", trail = "·", nbsp = "␣" }
+-- Only the `diff` item is overridden here; every fillchars item left out keeps
+-- its Neovim default. The one being replaced is `diff:-`, which fills the empty
+-- side of an unbalanced hunk with a band of dashes — the loudest thing on
+-- screen in a side-by-side diff, drawn exactly where a GUI client (IntelliJ,
+-- VS Code) leaves a quiet shaded gap. U+2571 reads as texture rather than as
+-- content, which is the whole job of a filler line.
+opt.fillchars = { diff = "╱" }
+-- How every diff in this config is computed and drawn. Set globally rather
+-- than in diffview's spec (lua/plugins/editor.lua) because three separate
+-- things render diffs and only one of them is diffview: `<leader>gd` is
+-- gitsigns' diffthis, `:diffsplit` is built in, and all three read this option.
+--
+--   * internal, filler, closeoff, indent-heuristic and inline:char are
+--     Neovim 0.12's own defaults. Repeated rather than appended to so this
+--     list is the whole truth, instead of a delta against a default that has
+--     changed twice in two releases.
+--   * algorithm:histogram groups changed lines the way `git diff --histogram`
+--     does. The default (myers) splits a moved or re-indented block into
+--     unrelated add/delete pairs more often, which is what produces a diff
+--     where nothing lines up.
+--   * linematch:60 raises the default of 40. linematch is what pairs a changed
+--     line with its counterpart so inline:char can highlight just the words
+--     that differ; past the limit it gives up and the two sides stop aligning
+--     at all. The JS/TS hunks in the repos this config is used on routinely
+--     pass 40 lines. It is O(n*m) per hunk, hence a cap rather than no cap.
+--   * vertical makes :diffsplit and gitsigns' diffthis open left/right, the
+--     way diffview already does, instead of stacking the two versions.
+opt.diffopt = {
+  "internal", "filler", "closeoff", "indent-heuristic", "inline:char",
+  "algorithm:histogram", "linematch:60", "vertical",
+}
 opt.autoread = true
