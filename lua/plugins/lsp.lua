@@ -310,6 +310,13 @@ return {
         -- works in some.
         gate("n", "<C-S-o>", "<cmd>Telescope lsp_document_symbols<CR>",
           "textDocument/documentSymbol", "Go to symbol in file")
+        -- Cmd+Shift+O, the same chord on macOS, and gated the same way so the
+        -- alias can never outlive the capability its twin depends on. It goes
+        -- through gate() rather than a plain alias next to it for that reason:
+        -- a second vim.keymap.set would survive a client/unregisterCapability
+        -- that removed the first.
+        gate("n", "<D-S-o>", "<cmd>Telescope lsp_document_symbols<CR>",
+          "textDocument/documentSymbol", "Go to symbol in file (macOS)")
         gate("n", "<C-t>", "<cmd>Telescope lsp_dynamic_workspace_symbols<CR>",
           "workspace/symbol", "Go to symbol in workspace")
         -- The sidebar counterpart to <leader>ls, not a duplicate of it: a picker

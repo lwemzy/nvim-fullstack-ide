@@ -87,6 +87,7 @@ local MAPPINGS = {
   -- File explorer.
   { "n", "<C-e>", "Toggle explorer" },
   { "n", "<C-S-e>", "Reveal file in explorer" },
+  { "n", "<D-S-e>", "Reveal file in explorer (macOS)" },
 
   -- File explorer, VS Code's sidebar chord — and on this branch the Cmd twin of
   -- it, since Cmd+B is both VS Code's macOS chord and one of the few Cmd keys
@@ -131,6 +132,7 @@ local MAPPINGS = {
   { "n", "<F2>", "Rename symbol" },
   { "n", "<F4>", "Code action" },
   { "n", "<C-.>", "Code action" },
+  { "n", "<D-.>", "Code action (macOS)" },
   { "n", "<F12>", "Go to definition" },
 
   -- Diagnostics.
@@ -139,6 +141,7 @@ local MAPPINGS = {
   { "n", "<M-e>", "Show diagnostic detail" },
   { "n", "<M-x>", "Diagnostics list" },
   { "n", "<C-S-m>", "Problems panel" },
+  { "n", "<D-S-m>", "Problems panel (macOS)" },
   { "n", "<M-q>", "Build problems" },
 
   -- Run / debug the project (the keyboard half of the statusline toolbar).
@@ -194,6 +197,8 @@ local MAPPINGS = {
   { "n", "<M-S-Up>", "Copy line up" },
   { "n", "<C-S-k>", "Delete line" },
   { "x", "<C-S-k>", "Delete selected lines" },
+  { "n", "<D-S-k>", "Delete line (macOS)" },
+  { "x", "<D-S-k>", "Delete selected lines (macOS)" },
   { "n", "<C-CR>", "Insert line below" },
   { "n", "<C-S-CR>", "Insert line above" },
   { "i", "<C-CR>", "Insert line below" },
@@ -337,6 +342,15 @@ describe("config.keymaps", function()
       { "<D-p>", "<C-p>", { "n" } },
       { "<D-s>", "<C-s>", { "n", "i" } },
       { "<D-/>", "<C-/>", { "n", "x" } },
+      -- The VS Code-alignment keys that have a Cmd chord Ghostty leaves alone.
+      -- Measured with `ghostty +list-keybinds`, which reports this machine's
+      -- config and not only the shipped defaults: Cmd+E is search_selection and
+      -- Cmd+K is clear_screen, which is why those two are here in their
+      -- Cmd+Shift form and their plain form is absent rather than forgotten.
+      { "<D-S-e>", "<C-S-e>", { "n" } },
+      { "<D-.>",   "<C-.>",   { "n" } },
+      { "<D-S-m>", "<C-S-m>", { "n" } },
+      { "<D-S-k>", "<C-S-k>", { "n", "x" } },
     }
 
     --- What a mapping actually does: the rhs for a string mapping, the function

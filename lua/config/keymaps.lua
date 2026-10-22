@@ -64,6 +64,10 @@ map("n", "<C-S-Right>", ":vertical resize +2<CR>", { silent = true, desc = "Resi
 -- overrides: C-e (scroll 1 line) — use C-d/C-u for scrolling instead
 map("n", "<C-e>", ":NvimTreeToggle<CR>",   { silent = true, desc = "Toggle explorer" })
 map("n", "<C-S-e>", ":NvimTreeFindFile<CR>", { silent = true, desc = "Reveal file in explorer" })
+-- Cmd+Shift+E, VS Code's "Show Explorer" on macOS. Plain Cmd+E is not available:
+-- Ghostty binds it to search_selection (measured with `ghostty +list-keybinds`,
+-- which reports this machine's config and not just the shipped defaults).
+map("n", "<D-S-e>", ":NvimTreeFindFile<CR>", { silent = true, desc = "Reveal file in explorer (macOS)" })
 -- VS Code's sidebar toggle. <C-e> is kept as well rather than replaced: it is
 -- what this config has always used, and a second lhs on the same command costs
 -- nothing. Ctrl+B was free to take because the buffer list it used to open has
@@ -186,6 +190,8 @@ local function code_action()
 end
 map("n", "<F4>", code_action, { desc = "Code action" })
 map("n", "<C-.>", code_action, { desc = "Code action (VS Code-style quick fix)" })
+-- Cmd+. is VS Code's quick fix on macOS, and Ghostty claims nothing on it.
+map("n", "<D-.>", code_action, { desc = "Code action (macOS)" })
 map("n", "<F12>", "<cmd>Telescope lsp_definitions<CR>", { desc = "Go to definition" })
 
 -- ── Diagnostics ────────────────────────────────────────────────────────────
@@ -200,6 +206,7 @@ map("n", "<M-x>", "<cmd>Trouble diagnostics toggle<CR>",{ desc = "Diagnostics li
 -- VS Code's Problems panel. Same window as Alt+X, which stays: this is the
 -- chord VS Code trains and that one is the chord this config trained.
 map("n", "<C-S-m>", "<cmd>Trouble diagnostics toggle<CR>", { desc = "Problems panel" })
+map("n", "<D-S-m>", "<cmd>Trouble diagnostics toggle<CR>", { desc = "Problems panel (macOS)" })
 -- Build problems, which are a different list from diagnostics above and arrive
 -- from a different place: diagnostics come from the language server's view of the
 -- open file, this is what the *build* said (lua/config/problems.lua parses the
@@ -368,6 +375,10 @@ map("n", "<M-S-Up>",   ":t .-1<CR>k",    { silent = true, desc = "Copy line up" 
 -- selected lines, which is what VS Code does with a selection active.
 map("n", "<C-S-k>", "dd", { silent = true, desc = "Delete line" })
 map("x", "<C-S-k>", "d",  { silent = true, desc = "Delete selected lines" })
+-- Cmd+Shift+K is the same action in VS Code on macOS. Cmd+K alone is Ghostty's
+-- clear_screen, so only the Shift form is available.
+map("n", "<D-S-k>", "dd", { silent = true, desc = "Delete line (macOS)" })
+map("x", "<D-S-k>", "d",  { silent = true, desc = "Delete selected lines (macOS)" })
 
 -- Insert a blank line below/above without splitting the current one and without
 -- leaving insert mode — VS Code's Ctrl+Enter and Ctrl+Shift+Enter.

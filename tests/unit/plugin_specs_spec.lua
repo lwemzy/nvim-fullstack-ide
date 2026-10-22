@@ -271,7 +271,10 @@ describe("lua/plugins specs", function()
       -- lua/config/keymaps.lua is excluded because tests/unit/keymaps_spec.lua
       -- checks it far more thoroughly, comparing each alias's actual rhs or
       -- callback against its twin's rather than just the presence of both.
-      local MAC_ALIASES = { ["<D-r>"] = "<M-r>" }
+      local MAC_ALIASES = {
+        ["<D-r>"] = "<M-r>",
+        ["<D-S-o>"] = "<C-S-o>",
+      }
 
       local files = keymap_sources()
       -- Kept from main's side of this conflict, and it matters more here than it
