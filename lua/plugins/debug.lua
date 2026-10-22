@@ -128,6 +128,13 @@ return {
         require("dap").set_breakpoint(vim.fn.input("Breakpoint condition: "))
       end, desc = "Debug: Conditional breakpoint" },
       { "<C-F5>", function() require("dap").run_last() end,         desc = "Debug: Run last" },
+      -- VS Code's "Run and Debug" view, which is the panel F11 already toggles.
+      -- The F-key stepping layout above is NOT changed to match VS Code's
+      -- (F10 step over / F11 step into / Shift+F11 step out): F10 and F11 are
+      -- overridden per-buffer by ftplugin/java.lua for the test runners, so
+      -- moving the stepping keys onto them would make stepping work everywhere
+      -- except in Java — the language this config is mostly for.
+      { "<C-S-d>", function() require("dapui").toggle() end,        desc = "Run and debug view" },
     },
   },
 }

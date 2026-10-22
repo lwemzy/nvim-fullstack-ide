@@ -441,7 +441,7 @@ describe("ftplugin/java.lua", function()
         { "<F9>", "Organize imports" },
         { "<F10>", "Run nearest test" },
         { "<F11>", "Run all tests in class" },
-        { "<C-S-o>", "Organize imports" },
+        { "<M-O>", "Organize imports" },
         { "<C-S-v>", "Extract variable" },
         { "<C-S-c>", "Extract constant" },
       }) do

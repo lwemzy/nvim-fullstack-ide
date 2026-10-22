@@ -225,6 +225,9 @@ return {
     cmd = "Neogit",
     keys = {
       { "<leader>gg", "<cmd>Neogit<CR>", desc = "Git: Neogit status" },
+      -- VS Code's Source Control view. A `keys` entry and not a keymaps.lua
+      -- line for the same reason as <leader>gg: it has to stay a load trigger.
+      { "<C-S-g>", "<cmd>Neogit<CR>", desc = "Source control" },
     },
     opts = {
       -- Both default to nil, which means auto-detect: neogit runs

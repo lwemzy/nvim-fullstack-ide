@@ -42,6 +42,11 @@ return {
         main_term:toggle()
       end
       vim.keymap.set({ "n", "t" }, "<C-\\>", toggle_main_term, { desc = "Toggle terminal (cwd = current file's directory)" })
+      -- VS Code toggles the panel with Ctrl+` on every platform. Ghostty binds
+      -- nothing to it (checked against `ghostty +list-keybinds --default`), but
+      -- it needs a terminal that encodes Ctrl plus a backtick at all — so <C-\>
+      -- stays the one that is guaranteed to arrive, and this is the alias.
+      vim.keymap.set({ "n", "t" }, "<C-`>", toggle_main_term, { desc = "Toggle terminal (VS Code Ctrl+`)" })
 
       -- ── LazyGit ──────────────────────────────────────────────────────
       local lazygit = Terminal:new({

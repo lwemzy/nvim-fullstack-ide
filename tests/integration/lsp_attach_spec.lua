@@ -494,8 +494,12 @@ describe("on_attach source code actions", function()
     { lhs = "<leader>lu", kind = "source.removeUnused", desc = "Remove unused code" },
     { lhs = "<leader>lF", kind = "source.fixAll", desc = "Fix all fixable issues" },
     -- The same key ftplugin/java.lua binds to jdtls.organize_imports, so the
-    -- action is in one place across both languages.
-    { lhs = "<C-S-o>", kind = "source.organizeImports", desc = "Organize imports" },
+    -- action is in one place across both languages. <M-O> (VS Code's
+    -- Shift+Alt+O) and not <C-S-o>: that chord is VS Code's Go to Symbol in
+    -- File, which lua/plugins/lsp.lua now gates on documentSymbol — and while
+    -- organize-imports lived there it silently shadowed the global
+    -- close-other-splits mapping in TS and Java buffers only.
+    { lhs = "<M-O>", kind = "source.organizeImports", desc = "Organize imports" },
   }
 
   before_each(function()

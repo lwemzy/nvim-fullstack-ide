@@ -43,25 +43,74 @@ map("n", "<C-Right>", ":vertical resize +2<CR>", { silent = true, desc = "Resize
 -- overrides: C-e (scroll 1 line) — use C-d/C-u for scrolling instead
 map("n", "<C-e>", ":NvimTreeToggle<CR>",   { silent = true, desc = "Toggle explorer" })
 map("n", "<C-S-e>", ":NvimTreeFindFile<CR>", { silent = true, desc = "Reveal file in explorer" })
+-- VS Code's sidebar toggle. <C-e> is kept as well rather than replaced: it is
+-- what this config has always used, and a second lhs on the same command costs
+-- nothing. Ctrl+B was free to take because the buffer list it used to open has
+-- moved to <leader>bb — see the Telescope section below.
+map("n", "<C-b>", ":NvimTreeToggle<CR>",   { silent = true, desc = "Toggle explorer (sidebar)" })
 
 -- ── Telescope / Search ─────────────────────────────────────────────────────
--- C-p     = find files  (like VS Code)       overrides: prev completion (Tab still works)
--- leader+/ = live grep  (like "Find in Files") — see note below on why not a Ctrl+Shift combo
--- C-b     = open buffers                      overrides: page-back      (C-u still scrolls)
--- C-t     = recent files                      overrides: tag-jump       (rarely used)
+-- The VS Code chords, in the order their names appear in its Command Palette:
+-- C-p   = Go to File              overrides: prev completion (Tab still works)
+-- C-S-p = Command Palette
+-- C-f   = Find (in this file)     overrides: page-forward    (C-d/C-u scroll)
+-- C-S-f = Find in Files           (leader+/ does the same — see below)
+--
+-- The buffer list and the recent-files list used to be on C-b and C-t, which
+-- VS Code spends on the sidebar and on Go to Symbol in Workspace. They moved to
+-- <leader>bb and <leader>fr, under the "buffer" and "find / format" which-key
+-- groups that lua/plugins/ui.lua already declares.
 map("n", "<C-p>", "<cmd>Telescope find_files<CR>",  { desc = "Find files" })
--- leader+/ (not Ctrl+Shift+F): terminal emulators commonly claim Ctrl+Shift+F
--- as their own "find in terminal" shortcut, which swallows the keypress
--- before Neovim ever sees it. leader (Space) has no modifier key for a
--- terminal to intercept, so it always reaches Neovim.
+-- leader+/ stays the primary "find in files" key and C-S-f is the alias, not the
+-- other way round. Measured, not assumed: `ghostty +list-keybinds --default` on
+-- this machine binds ctrl+shift+f to nothing (only super+shift+f=end_search), so
+-- the chord does reach Neovim here — but Ctrl+Shift+F is the stock "find" binding
+-- in GNOME Terminal, Konsole and xfce4-terminal, which is where this branch is
+-- aimed. leader (Space) carries no modifier for a terminal to claim, so it is the
+-- one that always works.
 map("n", "<leader>/", function() require("telescope.builtin").live_grep() end, { desc = "Live grep (search in files)" })
-map("n", "<C-b>", "<cmd>Telescope buffers<CR>", { desc = "Switch buffer" })
-map("n", "<C-t>", "<cmd>Telescope oldfiles<CR>",    { desc = "Recent files" })
+map("n", "<C-S-f>", function() require("telescope.builtin").live_grep() end, { desc = "Find in files" })
+-- `/` rather than a fuzzy picker: VS Code's find box highlights every match and
+-- steps through them with Enter, which is what incsearch + hlsearch + n/N already
+-- do here — and n/N are centred (see the editing helpers below). A
+-- current_buffer_fuzzy_find would be a different feature wearing this key's name.
+map("n", "<C-f>", "/", { desc = "Find in this file" })
+-- Telescope's `commands` picker is the closest thing to the Command Palette: it
+-- lists every user command with its description and runs the chosen one.
+map("n", "<C-S-p>", "<cmd>Telescope commands<CR>", { desc = "Command palette" })
+map("n", "<leader>bb", "<cmd>Telescope buffers<CR>", { desc = "Switch buffer" })
+map("n", "<leader>fr", "<cmd>Telescope oldfiles<CR>", { desc = "Recent files" })
 
 -- ── Save / Quit ────────────────────────────────────────────────────────────
 map({ "n", "i" }, "<C-s>", "<Esc>:w<CR>",  { silent = true, desc = "Save file" })
 -- C-q: overrides visual-block-2 (C-v still works for that)
 map("n", "<C-q>", ":qa<CR>", { silent = true, desc = "Quit all" })
+
+-- ── Select all / go to line ────────────────────────────────────────────────
+-- Both were free to take because the AI panel and prompt that held them have
+-- moved under the <leader>a group (see the AI section below).
+--
+-- overrides: C-a (increment the number under the cursor). The increment pair is
+-- C-a/C-x and only C-a is taken here, so g C-a in visual mode — which is the one
+-- that actually gets used, for renumbering a block — is untouched.
+map("n", "<C-a>", "ggVG", { desc = "Select all" })
+-- overrides: C-g (show the current file's name and position), which is a
+-- statusline away.
+--
+-- A prompt rather than `:`, because the point of the VS Code chord is that you
+-- type a bare number: `:` would need the number *and* Enter with nothing
+-- validating it, and a typo there runs an Ex command. tonumber rejects anything
+-- that is not a line number, and an empty answer (Esc) cancels.
+map("n", "<C-g>", function()
+  vim.ui.input({ prompt = "Go to line: " }, function(answer)
+    local line = tonumber(answer)
+    if not line then return end
+    -- Clamp rather than error: VS Code's Go to Line takes you to the end of the
+    -- file when the number is past it, and `:normal! 9999G` would beep instead.
+    line = math.max(1, math.min(line, vim.api.nvim_buf_line_count(0)))
+    vim.cmd("normal! " .. line .. "Gzz")
+  end)
+end, { desc = "Go to line" })
 
 -- ── Format ─────────────────────────────────────────────────────────────────
 -- Format-on-save handles this automatically (configured in editor.lua) and is
@@ -75,9 +124,15 @@ map("n", "<C-q>", ":qa<CR>", { silent = true, desc = "Quit all" })
 -- dropping it would silently turn every Java/XML format into a no-op — those
 -- filetypes have no entry in formatters_by_ft and are formatted by their
 -- language server through exactly this option.
-map("n", "<M-l>", function()
+local function format_buffer()
   require("conform").format({ async = true, lsp_format = "fallback" })
-end, { desc = "Format file" })
+end
+map("n", "<M-l>", format_buffer, { desc = "Format file" })
+-- Shift+Alt+F is VS Code's "Format Document" on Windows/Linux, and Alt+L stays
+-- because it is what this config has used and what IntelliJ trains. Shift+Alt+F
+-- normalises to <M-F>, which is a different lhs from grug-far's <M-f> — the
+-- <M-t>/<M-T> pair in lua/plugins/testing.lua relies on the same distinction.
+map("n", "<M-F>", format_buffer, { desc = "Format file (VS Code Shift+Alt+F)" })
 -- Under the existing leader+u "ui toggles" group (see plugins/ui.lua's which-key
 -- spec), alongside leader+uh for inlay hints, rather than another Alt chord.
 map("n", "<leader>uf", function()
@@ -115,6 +170,9 @@ map("n", "]d", function() vim.diagnostic.jump({ count = 1,  float = true }) end,
 map("n", "[d", function() vim.diagnostic.jump({ count = -1, float = true }) end, { desc = "Prev diagnostic" })
 map("n", "<M-e>", vim.diagnostic.open_float,            { desc = "Show diagnostic detail" })
 map("n", "<M-x>", "<cmd>Trouble diagnostics toggle<CR>",{ desc = "Diagnostics list" })
+-- VS Code's Problems panel. Same window as Alt+X, which stays: this is the
+-- chord VS Code trains and that one is the chord this config trained.
+map("n", "<C-S-m>", "<cmd>Trouble diagnostics toggle<CR>", { desc = "Problems panel" })
 -- Build problems, which are a different list from diagnostics above and arrive
 -- from a different place: diagnostics come from the language server's view of the
 -- open file, this is what the *build* said (lua/config/problems.lua parses the
@@ -204,13 +262,26 @@ map("n", "<C-w>", function() require("bufdelete").bufdelete(0, false) end, { sil
 -- ── Split windows ──────────────────────────────────────────────────────────
 map("n", "<C-S-v>", ":vsplit<CR>",  { silent = true, desc = "Split vertical" })
 map("n", "<C-S-x>", ":split<CR>",   { silent = true, desc = "Split horizontal" })
-map("n", "<C-S-o>", "<C-w>o",       { silent = true, desc = "Close all other splits" })
+-- Was <C-S-o>, which VS Code spends on Go to Symbol in File — that is now bound
+-- per-buffer in lua/plugins/lsp.lua, where the document-symbol capability can be
+-- checked first. <leader>s is the "split" which-key group lua/plugins/ui.lua
+-- already declares and had no members until now.
+--
+-- Ctrl+Shift+V and Ctrl+Shift+X are deliberately NOT given up, even though VS
+-- Code uses them for Markdown Preview and the Extensions view: splitting is a
+-- keystroke that gets pressed all day here, and `:Lazy` is not. VS Code's own
+-- split key, Ctrl+\, belongs to toggleterm (lua/plugins/terminal.lua).
+map("n", "<leader>so", "<C-w>o",    { silent = true, desc = "Close all other splits" })
 
 -- ── AI (Claude CLI — no API key needed) ─────────────────────────────────────
+-- Under the <leader>a group ("AI (Claude)" in lua/plugins/ui.lua's which-key
+-- spec, which was declared for this and had no members). The panel and the
+-- prompt were on C-g and C-a, which VS Code spends on Go to Line and Select All;
+-- these are the two the rest of this file's VS Code alignment needed back.
 local ai = function(fn) return function() require("claude_cli")[fn]() end end
 
-map("n", "<C-g>",  ai("toggle_chat"),    { desc = "AI: Toggle Claude panel" })
-map("n", "<C-a>",  ai("prompt"),         { desc = "AI: Ask Claude anything" })
+map("n", "<leader>aa", ai("toggle_chat"), { desc = "AI: Toggle Claude panel" })
+map("n", "<leader>ap", ai("prompt"),      { desc = "AI: Ask Claude anything" })
 -- Visual mode — select code first, then press the shortcut.
 -- Mode "x" (visual), NOT "v". "v" means visual + SELECT mode, and select mode is
 -- what LuaSnip puts you in when it selects a snippet placeholder: there, any
@@ -245,6 +316,45 @@ map("x", "K", ":m '<-2<CR>gv=gv", { silent = true, desc = "Move selection up" })
 -- Move current line up/down in normal mode (no selection needed)
 map("n", "<M-j>", ":m .+1<CR>==", { silent = true, desc = "Move line down" })
 map("n", "<M-k>", ":m .-2<CR>==", { silent = true, desc = "Move line up" })
+-- VS Code puts these on Alt+Up/Down. Alt+j/k stays as the home-row version, so
+-- both habits work; the arrows are what a VS Code user reaches for first.
+map("n", "<M-Down>", ":m .+1<CR>==", { silent = true, desc = "Move line down" })
+map("n", "<M-Up>",   ":m .-2<CR>==", { silent = true, desc = "Move line up" })
+-- And the visual-mode halves, so a selection moves with the same chord it moves
+-- with in VS Code. Same rhs as J/K above, "x" for the same select-mode reason.
+map("x", "<M-Down>", ":m '>+1<CR>gv=gv", { silent = true, desc = "Move selection down" })
+map("x", "<M-Up>",   ":m '<-2<CR>gv=gv", { silent = true, desc = "Move selection up" })
+
+-- Duplicate the current line up/down — VS Code's Shift+Alt+Up/Down.
+-- `:t .` copies the line to just after itself, so the cursor ends on the
+-- original and `:t .-1` would leave it on the copy; the explicit motion after
+-- each keeps the cursor on the *new* line both ways, which is what VS Code does.
+-- Shift+Alt+Up normalises to <M-S-Up> (verified with nvim_get_keymap), so that is
+-- the spelling used here — writing <S-M-Up> would store the same mapping under a
+-- name the tests' text scan would not match.
+map("n", "<M-S-Down>", ":t .<CR>",       { silent = true, desc = "Copy line down" })
+map("n", "<M-S-Up>",   ":t .-1<CR>k",    { silent = true, desc = "Copy line up" })
+
+-- Delete the whole line — VS Code's Ctrl+Shift+K. In visual mode it takes the
+-- selected lines, which is what VS Code does with a selection active.
+map("n", "<C-S-k>", "dd", { silent = true, desc = "Delete line" })
+map("x", "<C-S-k>", "d",  { silent = true, desc = "Delete selected lines" })
+
+-- Insert a blank line below/above without splitting the current one and without
+-- leaving insert mode — VS Code's Ctrl+Enter and Ctrl+Shift+Enter.
+--
+-- These need a terminal that encodes modified Enter (the kitty keyboard
+-- protocol, or anything else sending CSI-u); Ghostty does, and binds neither
+-- chord itself. In a terminal that does not, the keypress arrives as a plain
+-- <CR> and these never fire — nothing breaks, the shortcut is just absent, which
+-- is why `o`/`O` are not being replaced.
+-- All four land in insert mode on the new line, which is where VS Code leaves
+-- you: there it is the only mode, so "insert line below" always means "and keep
+-- typing there". `o`/`O` from normal mode rather than `o<Esc>` for that reason.
+map("n", "<C-CR>",   "o", { silent = true, desc = "Insert line below" })
+map("n", "<C-S-CR>", "O", { silent = true, desc = "Insert line above" })
+map("i", "<C-CR>",   "<Esc>o", { silent = true, desc = "Insert line below" })
+map("i", "<C-S-CR>", "<Esc>O", { silent = true, desc = "Insert line above" })
 
 -- Scroll and keep cursor centred
 map("n", "<C-d>", "<C-d>zz", { desc = "Scroll down, cursor centred" })
@@ -252,8 +362,13 @@ map("n", "<C-u>", "<C-u>zz", { desc = "Scroll up, cursor centred" })
 map("n", "n", "nzzzv", { desc = "Next search match, centred" })
 map("n", "N", "Nzzzv", { desc = "Prev search match, centred" })
 
--- Paste over selection without losing yanked text
-map("x", "<C-S-p>", '"_dP', { desc = "Paste without overwriting register" })
+-- Paste over selection without losing yanked text.
+-- Was <C-S-p>, which is now the Command Palette (see the Telescope section). It
+-- had to move rather than coexist: the palette is a normal-mode mapping and this
+-- is a visual-mode one, so nothing would have errored — the same chord would just
+-- have done two unrelated things depending on the mode, which is the kind of
+-- keymap that is impossible to remember.
+map("x", "<leader>p", '"_dP', { desc = "Paste without overwriting register" })
 
 -- Copy to system clipboard
 map({ "n", "x" }, "<C-y>", '"+y', { desc = "Copy to system clipboard" })
@@ -274,6 +389,22 @@ map("n", "<C-_>", comment_line,    { desc = "Toggle comment" })
 map("x", "<C-_>", comment_visual,  { desc = "Toggle comment" })
 map("n", "<C-/>", comment_line,    { desc = "Toggle comment" })
 map("x", "<C-/>", comment_visual,  { desc = "Toggle comment" })
+
+-- Block comment — VS Code's Shift+Alt+A. The linewise toggles above comment each
+-- line with `//`; this wraps the region in `/* */` instead, which is the
+-- distinction VS Code draws between Ctrl+/ and Shift+Alt+A. Comment.nvim exposes
+-- it as a separate api namespace (toggle.blockwise), so this is its own pair of
+-- callbacks rather than a flag on the ones above.
+local block_comment_line = function()
+  require("Comment.api").toggle.blockwise.current()
+end
+local block_comment_visual = function()
+  local esc = vim.api.nvim_replace_termcodes("<ESC>", true, false, true)
+  vim.api.nvim_feedkeys(esc, "nx", false)
+  require("Comment.api").toggle.blockwise(vim.fn.visualmode())
+end
+map("n", "<M-A>", block_comment_line,   { desc = "Toggle block comment" })
+map("x", "<M-A>", block_comment_visual, { desc = "Toggle block comment" })
 
 -- Clear search highlight
 map("n", "<Esc>", ":nohlsearch<CR>", { silent = true, desc = "Clear search highlight" })

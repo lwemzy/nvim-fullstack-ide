@@ -235,6 +235,12 @@ return {
           "textDocument/declaration", "Go to declaration")
         gate("n", "gr", "<cmd>Telescope lsp_references<CR>",
           "textDocument/references", "Find references")
+        -- VS Code's Shift+F12. Bound here rather than in keymaps.lua, and
+        -- through gate() rather than vim.keymap.set, for the reason the whole
+        -- gate mechanism exists: a server with no references provider would
+        -- otherwise give you a key that opens an empty picker.
+        gate("n", "<S-F12>", "<cmd>Telescope lsp_references<CR>",
+          "textDocument/references", "Go to references (VS Code Shift+F12)")
         gate("n", "gi", "<cmd>Telescope lsp_implementations<CR>",
           "textDocument/implementation", "Find implementations")
         gate("n", "<leader>lt", "<cmd>Telescope lsp_type_definitions<CR>",
@@ -258,6 +264,22 @@ return {
           "textDocument/documentSymbol", "Document symbols")
         gate("n", "<leader>lw", "<cmd>Telescope lsp_dynamic_workspace_symbols<CR>",
           "workspace/symbol", "Workspace symbols")
+        -- The VS Code chords for the same two pickers: Ctrl+Shift+O is "Go to
+        -- Symbol in File" and Ctrl+T is "Go to Symbol in Workspace". The
+        -- <leader> twins above stay, because they are the discoverable version
+        -- (which-key lists them under the "lsp" group) and because a terminal
+        -- emulator can swallow a Ctrl+Shift chord before Neovim sees it.
+        --
+        -- Buffer-local and capability-gated is the whole point of putting them
+        -- here instead of keymaps.lua. Ctrl+T in particular: with no attached
+        -- server it falls back to Neovim's own <C-t> (pop the tag stack), which
+        -- is the nearest thing vim has to "go to symbol" — a global mapping
+        -- would have taken that away in every buffer to provide a key that only
+        -- works in some.
+        gate("n", "<C-S-o>", "<cmd>Telescope lsp_document_symbols<CR>",
+          "textDocument/documentSymbol", "Go to symbol in file")
+        gate("n", "<C-t>", "<cmd>Telescope lsp_dynamic_workspace_symbols<CR>",
+          "workspace/symbol", "Go to symbol in workspace")
         -- The sidebar counterpart to <leader>ls, not a duplicate of it: a picker
         -- answers "jump to the symbol I can already name", an outline answers
         -- "what is in this file" — the question you have when you open a 900-line
@@ -357,12 +379,19 @@ return {
           map("<leader>lu", source_action("source.removeUnused"),      "Remove unused code")
           map("<leader>lF", source_action("source.fixAll"),            "Fix all fixable issues")
           -- The same key ftplugin/java.lua uses for organize imports, so the
-          -- action is in one place across both languages. Buffer-local, so it
-          -- only shadows keymaps.lua's global <C-S-o> ("close all other
-          -- splits") in TS/JS buffers — exactly what the Java ftplugin has
-          -- always done. <leader>li is the one to reach for if a terminal
-          -- emulator swallows Ctrl+Shift+O before Neovim sees it.
-          map("<C-S-o>", source_action("source.organizeImports"), "Organize imports")
+          -- action is in one place across both languages.
+          --
+          -- Shift+Alt+O, not Ctrl+Shift+O: those are VS Code's two separate
+          -- commands — Shift+Alt+O is Organize Imports and Ctrl+Shift+O is Go
+          -- to Symbol in File, which is gated above. On the old binding the two
+          -- collided invisibly, because this buffer-local mapping shadowed the
+          -- global one: Ctrl+Shift+O organised imports in a TS or Java buffer
+          -- and closed every other split anywhere else. Shift+Alt+O normalises
+          -- to <M-O>, which is distinct from neotest's <M-o>.
+          --
+          -- <leader>li is still the one to reach for if a terminal emulator
+          -- swallows the chord before Neovim sees it.
+          map("<M-O>", source_action("source.organizeImports"), "Organize imports")
         end
 
         gate("n", "<leader>uh", function()

@@ -281,7 +281,10 @@ local config = {
     map("<F9>",  jdtls.organize_imports,        "Organize imports")
     map("<F10>", jdtls.test_nearest_method,     "Run nearest test")
     map("<F11>", jdtls.test_class,              "Run all tests in class")
-    map("<C-S-o>", jdtls.organize_imports,      "Organize imports")
+    -- Shift+Alt+O is VS Code's Organize Imports; Ctrl+Shift+O is its Go to
+    -- Symbol in File, which lua/plugins/lsp.lua gates on documentSymbol support
+    -- for jdtls too. This mapping used to sit on <C-S-o> and shadow that.
+    map("<M-O>", jdtls.organize_imports,        "Organize imports")
     map("<C-S-v>", jdtls.extract_variable,      "Extract variable")
     map("<C-S-c>", jdtls.extract_constant,      "Extract constant")
 

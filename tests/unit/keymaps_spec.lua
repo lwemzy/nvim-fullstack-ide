@@ -83,11 +83,24 @@ local MAPPINGS = {
   { "n", "<C-e>", "Toggle explorer" },
   { "n", "<C-S-e>", "Reveal file in explorer" },
 
-  -- Telescope.
+  -- File explorer, VS Code's sidebar chord.
+  { "n", "<C-b>", "Toggle explorer (sidebar)" },
+
+  -- Telescope. C-b and C-t used to be the buffer and recent-file pickers; they
+  -- are VS Code's sidebar toggle and Go to Symbol in Workspace, so the pickers
+  -- moved to <leader>bb / <leader>fr and C-t is now gated per-buffer in
+  -- lua/plugins/lsp.lua (covered by tests/integration/lsp_attach_spec.lua).
   { "n", "<C-p>", "Find files" },
   { "n", "<leader>/", "Live grep" },
-  { "n", "<C-b>", "Switch buffer" },
-  { "n", "<C-t>", "Recent files" },
+  { "n", "<C-S-f>", "Find in files" },
+  { "n", "<C-f>", "Find in this file" },
+  { "n", "<C-S-p>", "Command palette" },
+  { "n", "<leader>bb", "Switch buffer" },
+  { "n", "<leader>fr", "Recent files" },
+
+  -- Select all / go to line, both freed by moving the AI keys under <leader>a.
+  { "n", "<C-a>", "Select all" },
+  { "n", "<C-g>", "Go to line" },
 
   -- Save / quit.
   { "n", "<C-s>", "Save file" },
@@ -96,6 +109,7 @@ local MAPPINGS = {
 
   -- Format.
   { "n", "<M-l>", "Format file" },
+  { "n", "<M-F>", "Format file" },
   { "n", "<leader>uf", "Toggle format on save" },
   -- The other half of save-time rewriting: eslint --fix runs on BufWritePre and
   -- prettier on BufWritePost, so they can churn the same character on every
@@ -113,6 +127,7 @@ local MAPPINGS = {
   { "n", "[d", "Prev diagnostic" },
   { "n", "<M-e>", "Show diagnostic detail" },
   { "n", "<M-x>", "Diagnostics list" },
+  { "n", "<C-S-m>", "Problems panel" },
   { "n", "<M-q>", "Build problems" },
 
   -- Run / debug the project (the keyboard half of the statusline toolbar).
@@ -131,14 +146,17 @@ local MAPPINGS = {
   { "n", "<S-h>", "Prev buffer" },
   { "n", "<C-w>", "Close buffer" },
 
-  -- Splits.
+  -- Splits. Close-all-others moved off <C-S-o>, which is VS Code's Go to Symbol
+  -- in File and is now bound per-buffer in lua/plugins/lsp.lua.
   { "n", "<C-S-v>", "Split vertical" },
   { "n", "<C-S-x>", "Split horizontal" },
-  { "n", "<C-S-o>", "Close all other splits" },
+  { "n", "<leader>so", "Close all other splits" },
 
-  -- AI.
-  { "n", "<C-g>", "AI: Toggle Claude panel" },
-  { "n", "<C-a>", "AI: Ask Claude anything" },
+  -- AI. The panel and prompt moved off <C-g>/<C-a> so Go to Line and Select All
+  -- could have VS Code's chords; the six visual-mode ones are unchanged because
+  -- VS Code's Ctrl+1..6 (focus editor group N) has no visual-mode meaning.
+  { "n", "<leader>aa", "AI: Toggle Claude panel" },
+  { "n", "<leader>ap", "AI: Ask Claude anything" },
   { "x", "<C-1>", "AI: Explain code" },
   { "x", "<C-2>", "AI: Refactor code" },
   { "x", "<C-3>", "AI: Generate tests" },
@@ -155,11 +173,26 @@ local MAPPINGS = {
   { "x", "K", "Move selection up" },
   { "n", "<M-j>", "Move line down" },
   { "n", "<M-k>", "Move line up" },
+  -- VS Code's Alt+Up/Down for the same move, and Shift+Alt+Up/Down to copy. The
+  -- M-j/M-k pair above is kept: it is what this config has always used.
+  { "n", "<M-Down>", "Move line down" },
+  { "n", "<M-Up>", "Move line up" },
+  { "x", "<M-Down>", "Move selection down" },
+  { "x", "<M-Up>", "Move selection up" },
+  { "n", "<M-S-Down>", "Copy line down" },
+  { "n", "<M-S-Up>", "Copy line up" },
+  { "n", "<C-S-k>", "Delete line" },
+  { "x", "<C-S-k>", "Delete selected lines" },
+  { "n", "<C-CR>", "Insert line below" },
+  { "n", "<C-S-CR>", "Insert line above" },
+  { "i", "<C-CR>", "Insert line below" },
+  { "i", "<C-S-CR>", "Insert line above" },
   { "n", "<C-d>", "Scroll down, cursor centred" },
   { "n", "<C-u>", "Scroll up, cursor centred" },
   { "n", "n", "Next search match, centred" },
   { "n", "N", "Prev search match, centred" },
-  { "x", "<C-S-p>", "Paste without overwriting register" },
+  -- Paste-without-overwriting moved off <C-S-p>, which is the Command Palette.
+  { "x", "<leader>p", "Paste without overwriting register" },
   { "n", "<C-y>", "Copy to system clipboard" },
   { "x", "<C-y>", "Copy to system clipboard" },
   { "n", "<C-S-y>", "Copy line to system clipboard" },
@@ -169,6 +202,10 @@ local MAPPINGS = {
   { "x", "<C-_>", "Toggle comment" },
   { "n", "<C-/>", "Toggle comment" },
   { "x", "<C-/>", "Toggle comment" },
+  -- VS Code's Shift+Alt+A block comment. Normalized form: nvim stores <S-M-a>
+  -- as <M-A>, so that is what the source has to say for this scan to find it.
+  { "n", "<M-A>", "Toggle block comment" },
+  { "x", "<M-A>", "Toggle block comment" },
 
   -- Search highlight.
   { "n", "<Esc>", "Clear search highlight" },
@@ -353,8 +390,14 @@ describe("config.keymaps", function()
 
     it("also restricts the visual AI and paste mappings to mode x", function()
       -- Same reasoning, same failure mode: these were the mappings that broke
-      -- snippet placeholders in the first place.
-      for _, lhs in ipairs({ "<C-1>", "<C-2>", "<C-3>", "<C-4>", "<C-5>", "<C-6>", "<C-S-p>", "<C-y>" }) do
+      -- snippet placeholders in the first place. The VS Code-era additions are
+      -- in the list for the same reason — <M-A>, <M-Up>/<M-Down> and <C-S-k>
+      -- all act on a *selection*, so "v" would make them fire over a snippet
+      -- placeholder too.
+      for _, lhs in ipairs({
+        "<C-1>", "<C-2>", "<C-3>", "<C-4>", "<C-5>", "<C-6>", "<C-y>",
+        "<leader>p", "<M-A>", "<M-Up>", "<M-Down>", "<C-S-k>",
+      }) do
         assert.equals(2, H.keymap("x", lhs).mode_bits, lhs .. " is not visual-only")
       end
     end)

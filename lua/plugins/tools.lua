@@ -8,9 +8,14 @@ return {
         spinnerStates = { "⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷" },
       })
     end,
+    -- <C-S-h> is VS Code's "Replace in Files", and it is a `keys` entry rather
+    -- than a line in lua/config/keymaps.lua so that it stays a lazy-load trigger
+    -- like <M-f>: a require() from keymaps.lua would work (lazy hooks require)
+    -- but would not tell lazy that this plugin is wanted.
     keys = {
       { "<M-f>", function() require("grug-far").open() end,                                             desc = "Find & Replace (project)" },
       { "<M-f>", function() require("grug-far").open({ prefills = { search = vim.fn.expand("<cword>") } }) end, mode = "v", desc = "Find & Replace (word)" },
+      { "<C-S-h>", function() require("grug-far").open() end,                                           desc = "Replace in files" },
     },
   },
 
@@ -215,12 +220,19 @@ return {
     event = "VeryLazy",
     init = function()
       -- Ctrl+N selects next occurrence (default — works in normal mode)
+      --
+      -- Add Cursor Down/Up are Ctrl+Alt+arrow, which is what VS Code uses, and
+      -- not Alt+arrow, which is VS Code's *move line* and is what
+      -- lua/config/keymaps.lua binds it to. That used to be a silent conflict in
+      -- this config's favour-of-nobody way: this plugin loads at VeryLazy, i.e.
+      -- after keymaps.lua has run, so VM took Alt+Up/Down and the move-line keys
+      -- next to <M-j>/<M-k> did nothing at all.
       vim.g.VM_maps = {
         ["Find Under"]         = "<C-n>",
         ["Find Subword Under"] = "<C-n>",
         ["Select All"]         = "<M-n>",
-        ["Add Cursor Down"]    = "<M-Down>",
-        ["Add Cursor Up"]      = "<M-Up>",
+        ["Add Cursor Down"]    = "<C-M-Down>",
+        ["Add Cursor Up"]      = "<C-M-Up>",
       }
     end,
   },
