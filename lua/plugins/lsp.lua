@@ -147,11 +147,25 @@ return {
       local capabilities = require("config.capabilities").make()
 
       -- ── Shared on_attach keymaps ────────────────────────────────────────
-      -- Buffers whose inlay hints on_attach has already switched on, so that a
-      -- re-run can tell "hints were never enabled here" (enable them) from "the
-      -- user turned them off with <leader>uh" (leave them off). is_enabled()
-      -- alone cannot: it is false in both cases. Cleared with the buffer by
-      -- hint_augroup below, because bufnrs are recycled.
+      -- Whether the user has ever asked for inlay hints on a buffer, distinct
+      -- from is_enabled(): that goes false both when the user never asked and
+      -- when nvim's own LspDetach handler auto-disables hints because the last
+      -- supporting client just left (runtime inlay_hint.lua:301-312) — a state
+      -- that must recover on its own once a replacement attaches, not be
+      -- confused with "never wanted". Sticks for the buffer's lifetime once
+      -- true; only a buffer wipeout or an explicit <leader>uh toggle-off clears
+      -- it, never a detach. Cleared with the buffer by hint_augroup below,
+      -- because bufnrs are recycled.
+      local hints_wanted = {}
+
+      -- Buffers whose inlay hints on_attach has already switched on for the
+      -- CURRENT set of attached providers, so a re-run can tell "a provider
+      -- just (re)joined a wanted buffer" (enable it) from "an unrelated
+      -- registration, or a re-run for a client that was already a provider"
+      -- (leave it alone). Reset to nil whenever the last supporting provider
+      -- detaches, so the next provider to attach re-triggers an unconditional
+      -- enable — the only way to recover from is_enabled() having been forced
+      -- false by nvim's own LspDetach handler in the meantime.
       local hints_initialised = {}
 
       --- Does ANY client attached to bufnr support `method`, ignoring `except`?
@@ -352,37 +366,47 @@ return {
         end
 
         gate("n", "<leader>uh", function()
-          vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }), { bufnr = bufnr })
+          local turning_on = not vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr })
+          hints_wanted[bufnr] = turning_on
+          vim.lsp.inlay_hint.enable(turning_on, { bufnr = bufnr })
         end, "textDocument/inlayHint", "Toggle inlay hints")
         if supports("textDocument/inlayHint") then
-          -- enable(true) both switches hints on for the buffer and drops the
-          -- stored ones so they are re-requested from every current provider.
-          --
-          -- Three cases, and they need telling apart:
-          --
-          -- 1. Hints have never been on for this buffer → enable them. That first
-          --    time is often a re-run rather than the attach, because jdtls only
-          --    registers textDocument/inlayHint after its didOpen, so at LspAttach
-          --    there is nothing to enable yet.
-          -- 2. A hint provider has just joined a buffer whose hints are on (this
-          --    attach, or a registration that added the capability) → re-request,
-          --    so the newcomer gets asked and the ownership rule in the
-          --    textDocument/inlayHint handler below can re-decide who wins. Without
-          --    this a higher-ranked server that attaches second never supplies a
-          --    single hint.
-          -- 3. Anything else — an unrelated registration, or a re-run for a client
-          --    that was already a provider → leave it alone. Otherwise hints are
-          --    re-requested for the whole buffer on every registration jdtls makes.
-          --
-          -- Cases 2 and 3 both check is_enabled: a re-request must never undo a
-          -- <leader>uh toggle-off, which is why case 1 cannot just use is_enabled
-          -- (that is false both before the first enable and after a toggle-off).
-          local joined = not opts.rerun or opts.hints_registered
-          if not hints_initialised[bufnr] then
-            hints_initialised[bufnr] = true
-            vim.lsp.inlay_hint.enable(true, { bufnr = bufnr })
-          elseif joined and vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }) then
-            vim.lsp.inlay_hint.enable(true, { bufnr = bufnr })
+          -- Inlay hints default to OFF. hints_wanted starts nil for a fresh
+          -- buffer, so nothing below fires until <leader>uh sets it — except
+          -- when is_enabled() is already true here (a test, or any other code,
+          -- called enable(true) directly before a client existed to ask): that
+          -- counts as wanting hints too, since it is otherwise indistinguishable
+          -- from the user's own toggle.
+          if hints_wanted[bufnr] == nil and vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }) then
+            hints_wanted[bufnr] = true
+          end
+          if hints_wanted[bufnr] then
+            -- enable(true) both switches hints on for the buffer and drops the
+            -- stored ones so they are re-requested from every current provider.
+            --
+            -- Two cases, and they need telling apart:
+            --
+            -- 1. hints_initialised is nil: either this is the first provider ever
+            --    for a wanted buffer, or the last one just detached and this is
+            --    its replacement (see the LspDetach handler below) — in the
+            --    latter is_enabled() reads false, forced there by nvim's own
+            --    LspDetach handler, so this case cannot be folded into the next
+            --    one without losing the recovery.
+            -- 2. Anything else — a provider joining a buffer whose hints are
+            --    already live (this attach, or a registration that added the
+            --    capability) → re-request, so the newcomer gets asked and the
+            --    ownership rule in the textDocument/inlayHint handler below can
+            --    re-decide who wins. Gated on is_enabled so an unrelated
+            --    registration, or a re-run for a client that was already a
+            --    provider, leaves the buffer alone instead of re-requesting on
+            --    every registration jdtls makes.
+            local joined = not opts.rerun or opts.hints_registered
+            if not hints_initialised[bufnr] then
+              hints_initialised[bufnr] = true
+              vim.lsp.inlay_hint.enable(true, { bufnr = bufnr })
+            elseif joined and vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }) then
+              vim.lsp.inlay_hint.enable(true, { bufnr = bufnr })
+            end
           end
         end
       end
@@ -568,13 +592,15 @@ return {
 
       local hint_augroup = vim.api.nvim_create_augroup("user_inlay_hint_owner", { clear = true })
 
-      -- bufnrs are recycled, so neither ownership nor "hints have been switched on
-      -- here once" may outlive the buffer.
+      -- bufnrs are recycled, so none of ownership, "hints have been switched on
+      -- for the current providers" or "the user has ever wanted hints here" may
+      -- outlive the buffer.
       vim.api.nvim_create_autocmd({ "BufWipeout", "BufDelete" }, {
         group = hint_augroup,
         callback = function(ev)
           hint_owner[ev.buf] = nil
           hints_initialised[ev.buf] = nil
+          hints_wanted[ev.buf] = nil
         end,
       })
 
@@ -589,11 +615,11 @@ return {
         callback = function(ev)
           -- Neovim's own LspDetach handler switches inlay hints off for the buffer
           -- once no attached client supports them (runtime inlay_hint.lua:301-312).
-          -- That is a state reset, not a <leader>uh toggle-off, so the "already
-          -- initialised" sentinel has to be reset with it — otherwise a
-          -- replacement client (:LspRestart hands the same server a NEW client_id)
-          -- attaches to a buffer that counts as initialised but has hints off, and
-          -- nothing ever turns them back on.
+          -- That is a state reset, not a <leader>uh toggle-off (hints_wanted is
+          -- untouched), so the "already initialised" sentinel has to be reset with
+          -- it — otherwise a replacement client (:LspRestart hands the same server
+          -- a NEW client_id) attaches to a buffer that counts as initialised but
+          -- has hints off, and nothing ever turns them back on.
           if not any_client_supports(ev.buf, "textDocument/inlayHint", ev.data.client_id) then
             hints_initialised[ev.buf] = nil
           end

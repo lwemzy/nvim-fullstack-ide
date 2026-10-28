@@ -161,6 +161,50 @@ return {
     },
   },
 
+  -- ── Markdown: inline Mermaid diagrams ────────────────────────────────────
+  -- image.nvim is the rendering backend (actual pixels on screen); diagram.nvim
+  -- extracts ```mermaid fences and shells out to mmdc to rasterize them, then
+  -- hands the PNG to image.nvim. Backend "kitty": Ghostty implements the Kitty
+  -- graphics protocol, so this needs no Überzug++/sixel fallback here. The
+  -- default processor (magick_cli) just needs ImageMagick's CLI, already on
+  -- this machine — no luarocks, no `build` step.
+  --
+  -- Requires mmdc on PATH (`npm i -g @mermaid-js/mermaid-cli`) and a working
+  -- Chromium/Chrome for mmdc's own headless rendering — it found this
+  -- machine's system google-chrome without any extra config.
+  {
+    "3rd/image.nvim",
+    build = false,
+    ft = { "markdown" },
+    opts = {
+      backend = "kitty",
+    },
+  },
+  {
+    "3rd/diagram.nvim",
+    dependencies = { "3rd/image.nvim" },
+    ft = { "markdown" },
+    config = function()
+      require("diagram").setup({
+        integrations = {
+          require("diagram.integrations.markdown"),
+        },
+        renderer_options = {
+          mermaid = { theme = "dark" },
+        },
+      })
+    end,
+    keys = {
+      {
+        "<leader>mv",
+        function() require("diagram").show_diagram_hover() end,
+        mode = "n",
+        ft = "markdown",
+        desc = "Markdown: View diagram at cursor",
+      },
+    },
+  },
+
   -- ── Multi-cursor editing ─────────────────────────────────────────────────
   {
     "mg979/vim-visual-multi",

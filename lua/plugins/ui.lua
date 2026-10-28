@@ -283,6 +283,7 @@ return {
         { "<leader>j", group = "java" },
         { "<leader>jg", group = "generate (java)" },
         { "<leader>l", group = "lsp" },
+        { "<leader>m", group = "markdown" },
         { "<leader>r", group = "run / debug" },
         { "<leader>s", group = "split" },
         { "<leader>u", group = "ui toggles" },

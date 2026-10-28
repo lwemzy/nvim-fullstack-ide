@@ -35,13 +35,26 @@ if [ ! -d "$(nvim --headless -c 'lua io.write(vim.fn.stdpath("data"))' -c 'qa!' 
   exit 2
 fi
 
-# Run "$@" and SIGTERM it after $1 seconds, leaving $TIMEOUT_MARKER behind if it
-# had to.
+# Run "$@" and SIGTERM its whole process group after $1 seconds, leaving
+# $TIMEOUT_MARKER behind if it had to.
 #
 # Not a nicety: headless nvim still stops on interactive prompts (`:w` on a file
 # that changed on disk asks W12/"write anyway?"), and because output is captured
 # per file, a spec that trips one produces no output at all and hangs the whole
 # run until someone notices. macOS ships no timeout(1), hence the watchdog.
+#
+# The whole process GROUP, not just nvim's own pid: an integration spec can
+# start a real jdtls/spring-boot-tools JVM as nvim's child, and a bare
+# `kill -TERM "$pid"` only reaches nvim itself — the JVM is left running,
+# orphaned, after nvim exits. Confirmed leaking real JVMs this way in
+# practice (dozens of abandoned spring-boot-tools processes after some
+# interrupted runs), not a theoretical risk. `set -m` puts the backgrounded
+# job in its own process group (its pid doubles as its pgid), so
+# `kill -TERM -- -"$pid"` reaches nvim and everything it spawned together.
+# The post-wait kill is a backstop for the non-timeout path too: nvim can
+# exit (crash, or this script's own caller losing the connection to it)
+# without ever running its Lua-level LSP-stop cleanup, leaving the group's
+# other members alive after the thing we waited on is already gone.
 #
 # The marker rather than the exit status: nvim catches SIGTERM and exits 1, which
 # is indistinguishable from an ordinary failing assertion. The watchdog's stdout
@@ -52,12 +65,15 @@ TIMEOUT_MARKER="$(mktemp -u "${TMPDIR:-/tmp}/nvim-ide-test-timeout.XXXXXX")"
 run_limited() {
   local secs="$1"; shift
   rm -f "$TIMEOUT_MARKER"
+  set -m
   "$@" &
   local pid=$!
-  ( sleep "$secs"; touch "$TIMEOUT_MARKER"; kill -TERM "$pid" ) >/dev/null 2>&1 &
+  set +m
+  ( sleep "$secs"; touch "$TIMEOUT_MARKER"; kill -s TERM -- "-$pid" ) >/dev/null 2>&1 &
   local watchdog=$!
   wait "$pid"; local rc=$?
   kill -TERM "$watchdog" >/dev/null 2>&1
+  kill -s TERM -- "-$pid" >/dev/null 2>&1
   return "$rc"
 }
 
