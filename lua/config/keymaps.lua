@@ -251,7 +251,9 @@ vim.api.nvim_create_user_command("A", alternate, {
 -- gr  = references
 -- gi  = implementations
 -- K   = hover docs
--- C-k = signature help  (set in lsp.lua on_attach)
+-- <leader>lk / insert <M-k> = signature help. NOT <C-k>, which is window-up
+-- above: a buffer-local mapping beats a global one, so an LSP <C-k> killed
+-- window-up in exactly the buffers it is used in. See lsp.lua's gate call.
 -- These are set per-buffer inside on_attach in lsp.lua
 
 -- ── Buffer tabs ────────────────────────────────────────────────────────────

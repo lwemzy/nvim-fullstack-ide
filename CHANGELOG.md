@@ -7,6 +7,179 @@ same commit.
 
 ## 2026-10-28
 
+- **Fix 18 bugs found by a full-codebase code review**
+  - Fifteen came out of the review; the last three were found while writing the
+    regression tests for the first fifteen, which is the argument for writing
+    them. Every one is covered by a spec — `./tests/run.sh all` is 34 spec files
+    passed, 0 failed (4 assertions skipped for a missing tool/parser/JDK), and
+    `make lint` passes.
+  - **Java project roots** (`ftplugin/java.lua`): `find_root` returns the
+    *nearest* ancestor holding any marker, and `pom.xml`/`build.gradle` were in
+    that set — so in a multi-module build every module became its own project.
+    Opening files from three modules started three jdtls JVMs and three
+    Gradle/Maven imports, and for Gradle a subproject imported standalone cannot
+    resolve `project(':lib')`, i.e. no classpath and zero completions in a
+    project that builds fine on the command line. Now two passes: root markers
+    (`.git`/`mvnw`/`gradlew`/`settings.gradle[.kts]`) first, module files only if
+    those find nothing, then the buffer's own directory — never `getcwd()`, which
+    is frequently `$HOME` and makes jdtls index the whole home directory.
+  - **jdtls refused to start on small machines** (`ftplugin/java.lua`): mason's
+    launcher hardcodes `-Xms1G` before appending our `--jvm-arg`s, so wherever
+    the heap sizing lands under 1024MB the JVM got `-Xms1G` with a smaller
+    `-Xmx` and died with "Initial heap size set to a larger value than the
+    maximum heap size". That is 682MB on a 4GB laptop or inside a 4GB
+    devcontainer and 512MB at 2GB — jdtls attached and immediately exited, Java
+    completion silently absent. Fixed by passing our own `-Xms` (a quarter of the
+    heap, floor 128MB), which lands after the launcher's and wins.
+  - **One bad bundle killed debugging entirely** (`ftplugin/java.lua`): the
+    java-debug glob used `glob(pat, true)`, whose two-argument form returns a
+    newline-*joined string* — so two side-by-side mason versions pushed one
+    unreadable `"…plugin-0.53.1.jar\n…plugin-0.54.0.jar"` entry into `bundles`,
+    and jdtls's `loadBundles` throws on a bad entry and aborts the whole list.
+    `<F5>`, `<leader>dR`, `<F10>`/`<F11>` and the Run toolbar all went dead at
+    once, silently. Both the list form and a readability filter over every
+    source (including `spring_boot.java_extensions()`, which this config does not
+    control) with a WARN naming the dropped jar.
+  - **`:JdtlsClean` cleaned the wrong project** (`ftplugin/java.lua`): the
+    command was global but `workspace_dir` is a per-project local and this file
+    is re-sourced per java buffer, so the surviving closure belonged to whichever
+    project was sourced last — with two projects open, `:JdtlsClean` from A
+    deleted B's workspace, reported success and fixed nothing. Now buffer-local,
+    with the client stop filtered to this `root_dir` (it used to force-stop every
+    Java project in the session) and `doautocmd FileType` instead of `:edit`,
+    which aborts with E37 on a modified buffer — the common case, since you reach
+    for `:JdtlsClean` when completion dies mid-edit, and the workspace was
+    already deleted by then.
+  - **Saving a build file never reindexed anything** (`lua/config/autocmds.lua`):
+    both the new-`.java` and the Gradle-refresh autocmds guarded on a *global*
+    `get_clients({ name = "jdtls" })` and then dispatched through
+    `vim.lsp.buf.execute_command`, which is `buf_request(0, …)` against the
+    *current* buffer's clients — and `build.gradle` is filetype `groovy`, which
+    jdtls never attaches to. The guard passed, the "refreshing…" toast appeared,
+    the request went nowhere. New `jdtls_for(path)` picks the client whose
+    `root_dir` contains the path (longest match, so a nested module beats its
+    aggregator) and sends through the client object, which also drops a
+    deprecated API. The ancestor test is a component-boundary one, not a string
+    prefix: `/p/app` is not an ancestor of `/p/app-legacy/build.gradle`.
+  - **Reindexing applied to whatever you had navigated to**
+    (`lua/config/autocmds.lua`): the new-`.java` handler resolved its target
+    buffer inside a one-second `defer_fn`, long enough to switch files. The
+    buffer name is captured up front now.
+  - **Auto-save silently stopped saving from the second edit on**
+    (`lua/config/autocmds.lua`): the `BufLeave` write fired no
+    `BufWritePre`/`BufWritePost` at all, so `auto_save_stamp` never re-stamped
+    and the staleness guard then refused every later write, blaming an external
+    change that never happened — every edit after the first lost on `:q!` or a
+    crash. It also meant `auto_create_dir` never ran (a new file in a
+    not-yet-existing directory was discarded) and auto-saved buffers were the
+    only ones skipping format-on-save. One word: `nested = true`.
+  - **Auto-save's staleness guard failed open three ways**
+    (`lua/config/autosave.lua`): it compared `getftime(name) > known`, one-sided
+    and at second resolution. `getftime` returns -1 for a missing file, so
+    `-1 > known` is false and a path deleted or renamed away got *recreated* from
+    the stale buffer — renaming `Old.java` to `New.java` in a terminal split left
+    both on disk, two classes of the same name and a build that stops compiling.
+    An external write in the same wall-clock second compared equal and was
+    clobbered. And mtime moving *backwards* is `<`, not `>`, which `tar -x`,
+    `unzip`, `cp -p`, `rsync -a`, `git checkout` and `touch -r` all do routinely.
+    Now mtime sec + nsec + size, which is what Neovim's own `buf_write`
+    compares, with the stamping (`M.stamp`) moved next to the comparison so the
+    stored shape has one owner — plus a `type(known) == "table"` guard, because a
+    buffer stamped before a config reload still carries the old bare number and
+    indexing it raised *inside* the `BufLeave` callback, aborting the write and
+    losing the edit: the exact outcome the guard exists to prevent.
+  - **LSP `<C-k>` broke window-up in every file you were editing**
+    (`lua/plugins/lsp.lua`, `lua/config/keymaps.lua`): signature help was gated
+    onto `<C-k>`, and a buffer-local mapping always beats a global one — so
+    `<C-k>` moved up a window in a scratch buffer, a terminal and the file tree
+    and did nothing of the sort in a real file, while `<C-h>`/`<C-j>`/`<C-l>`
+    kept working. An asymmetry inside one four-key set is the kind of thing you
+    blame on the terminal. Moved to `<leader>lk`, where the rest of the
+    non-vim-standard LSP verbs already live.
+  - **Capability-gated mappings were never taken back**
+    (`lua/plugins/lsp.lua`): `gate()`'s removal branch only runs while a client
+    is *attaching*, so a buffer that lost its server kept all ~16 of them —
+    `gr`, `gi`, `gD`, `<leader>rn`, `<leader>ca`, `<leader>ls/lw/lo/lt/lc/lC`,
+    `<S-F12>`, `<C-S-o>`, `<C-t>` and insert `<M-k>`. After `:LspStop`, a crash,
+    or `lsp_reap` reclaiming an idle jdtls they answered "no client supports …"
+    or opened an empty picker: exactly the "present but dead" state the gate
+    exists to prevent. `<C-t>` was the worst — it stayed shadowed, so the
+    built-in tag-stack pop its own comment promises as the fallback never came
+    back. New `LspDetach` handler over a `gated` list that `gate()` populates
+    itself, so it cannot drift from the call sites.
+  - **The idle-server reaper leaked the servers it existed to reap**
+    (`lua/config/lsp_reap.lua`): `client:stop()` with no argument defaults to
+    `exit_timeout = false`, which sends a `shutdown` request and nothing else. A
+    jdtls wedged on a Gradle import never answers it, the JVM stays resident with
+    its whole heap, and `_is_stopping` makes `is_stopped()` true immediately — so
+    the sweep guard then hid it from every later pass, permanently and
+    invisibly. Now a 10s timeout: a number rather than `true` because jdtls
+    flushes its index and project metadata on shutdown and a corrupted workspace
+    is worse than a few seconds of resident JVM.
+  - **Angular build errors parsed to an empty quickfix list**
+    (`lua/config/problems.lua`): `$VIMRUNTIME/compiler/tsc.vim` only knows tsc's
+    parenthesised form, and the two patterns added here captured the code with
+    `TS%n` — so Angular's template errors (`NG8001`) and i18n ones were dropped,
+    which is most of what an Angular build produces. Rewritten to eight entries
+    covering `Error:`/`Warning:`-prefixed webpack output, the bare
+    `path:line:col - error …` form, and esbuild's two-line shape (Angular 17+,
+    the default builder for every new project since) with the code left in the
+    message. Two subtleties are recorded in the file because both are
+    load-bearing: the prefixed entries exist because an errorformat entry is not
+    anchored to the line start, so `%f` ate the `Error: ` prefix and produced
+    unjumpable rows from a parse that looked like it worked; and the one-liners
+    must precede the multiline entries, because the trailing `%C%.%#` swallows
+    any line while a multiline message is open.
+  - **Stop killed an unrelated debug session** (`lua/config/runner.lua`):
+    `is_running` asked `dap.session() ~= nil`, i.e. "is *any* debug session live
+    anywhere", and nothing ever cleared a dap entry from `jobs`. The two faults
+    compounded: run a main class, let it finish, then start any unrelated session
+    (a jest test, a Chrome attach, another project's main) and the finished
+    target reported itself as running — Run refused with "already running" and
+    Stop terminated that other session. Fixed by stamping the registry id into
+    the DAP config and matching on identity against `dap.sessions()` (an accurate
+    live set, since nvim-dap's own `on_close` removes entries), dropping the dead
+    entry when the scan comes up empty, and having `M.stop` make our session
+    active before `dap.terminate`, which acts on the active one.
+  - **Tasks that start the application had no Stop and no Restart**
+    (`lua/config/runner.lua`): the picker lists `bootRun` in every Gradle build
+    and `spring-boot:run` in every Maven one, plus the project's npm scripts — so
+    the tasks it offers include long-lived processes, and all of them went
+    through the build path, which registers nothing. Ending one meant finding its
+    terminal and pressing Ctrl-C, and the toolbar's Run afterwards started a
+    second copy that died on the port the first still held. A task that starts
+    the app now registers under the target's own id, sharing the toolbar's entry.
+  - **jdtls startup, autosave, dap and run-state fixes all shipped with
+    regression tests** (`tests/`): new cases in `java_ftplugin_spec.lua`,
+    `autosave_spec.lua`, `autocmds_spec.lua`, `lsp_reap_spec.lua`,
+    `problems_spec.lua`, `runner_spec.lua` (unit and integration),
+    `lsp_attach_spec.lua`, `editing_spec.lua`, `plugins_load_spec.lua`,
+    `plugin_specs_spec.lua` and `terminal_spec.lua`.
+  - Found while writing those tests, not by reading — **the main terminal `cd`'d
+    nowhere for any path with a space in it** (`lua/plugins/terminal.lua`):
+    toggleterm's `change_dir` is `send(fmt("cd %s", dir))` with no quoting, and
+    `dir` comes from `expand("%:p:h")`. The shell answered "cd: too many
+    arguments" and stayed put, so every later `git commit` or `mvn test` typed
+    there ran against the previous project with nothing on screen to say so — and
+    a directory name containing `;` executed whatever followed it. Hand-rolled
+    with `shellescape`, reproducing `change_dir`'s early-out so repeated toggles
+    in one directory still send nothing (without it every toggle dropped a `cd`
+    and a `clear` into the shell, wiping the output of whatever had just run).
+  - And — **`<C-\>` opened no terminal at all for the rest of the session once
+    you had typed `exit`** (`lua/plugins/terminal.lua`): toggleterm never clears
+    `term.job_id`, and `close_on_exit` deletes the buffer and with it the channel,
+    so a `job_id ~= nil` test said "running" and the `cd` went into nothing —
+    `E900: Invalid channel id`, thrown out of the keymap callback before
+    `toggle()` ran. Now a `pcall` with the directory assignment as the recovery,
+    so the respawn gets it as its cwd. `config.runner`'s similar-looking
+    `term_live` is deliberately *not* reused here and says why in the code: that
+    one asks "has the process exited", this one "can I still write to this
+    channel", and `jobwait` pumps pending exit callbacks, which inside a keymap
+    callback lets an unrelated terminal's close take the keypress down with it
+    (observed: `E444`).
+  - `lazy-lock.json` is unchanged on purpose — the installed checkouts drifted 27
+    plugins ahead of the pins during this work, so the pins stand and the
+    checkouts need a `:Lazy restore`.
 - **Kill a test run's whole process group on timeout, not just nvim itself** (`211a70f`)
   - `tests/run.sh`'s watchdog only ever sent SIGTERM to the headless `nvim` process it started. An integration spec that starts a real `jdtls`/`spring-boot-tools` JVM as nvim's child was never touched by that signal — nvim exits, the JVM doesn't, and it's now an orphan with no parent to reap it. Confirmed in practice: dozens of abandoned `vscode-spring-boot-tools` JVMs (each `-Xmx1G`) accumulated across a run of interrupted/timed-out test invocations and triggered an OOM kill on the machine.
   - Fixed with `set -m` around the backgrounded `"$@" &` so it gets its own process group (bash gives a job started under job control its own pgid, equal to its pid), then `kill -s TERM -- -"$pid"` on both the timeout path and as an unconditional backstop after every `wait` — the negative pid targets the whole group, so nvim and anything it spawned die together. Verified directly (not just by reasoning about it): a throwaway script reproduced the old leak (a backgrounded child survived its "parent"'s `kill -TERM`) and confirmed the new version kills both.
@@ -25,7 +198,7 @@ same commit.
 
 ## 2026-10-22
 
-- **Align the keymap with VS Code's defaults, without giving up vim's own keys**
+- **Align the keymap with VS Code's defaults, without giving up vim's own keys** (`73fa190`)
   - The rule applied: wherever VS Code's chord was held by something this config *invented*, VS Code wins and the old binding moves to a `<leader>` key; wherever it was held by something **vim** owns, vim wins. So `<C-d>`/`<C-u>` (scroll), `<C-w>` and `<C-h/j/k/l>` (windows) are untouched, and VS Code's Ctrl+D "add selection to next match" stays unbound rather than displacing half-page scroll.
   - Moved to make room: buffer list `<C-b>` → `<leader>bb`, recent files `<C-t>` → `<leader>fr`, AI panel `<C-g>` → `<leader>aa`, AI prompt `<C-a>` → `<leader>ap`, close-other-splits `<C-S-o>` → `<leader>so`, paste-without-overwrite `<C-S-p>` → `<leader>p` (visual). All five land in which-key groups that already existed and were registered with no members (`<leader>a`, `<leader>b`, `<leader>f`, `<leader>s`), so nothing new had to be invented to label them.
   - Gained: `<C-b>` sidebar, `<C-f>` find in file, `<C-S-f>` find in files, `<C-S-p>` command palette, `<C-a>` select all, `<C-g>` go to line, `<C-S-m>` problems, `<C-S-k>` delete line, `<C-CR>`/`<C-S-CR>` insert line below/above, `<M-Up>`/`<M-Down>` move line, `<M-S-Up>`/`<M-S-Down>` copy line, `<M-A>` block comment, `<M-F>` format, `<M-O>` organize imports, `<S-F12>` go to references, `<C-S-o>` go to symbol in file, `<C-t>` go to symbol in workspace, `<C-S-h>` replace in files, `<C-S-g>` source control, `<C-S-d>` run and debug, `` <C-`> `` terminal.

@@ -28,9 +28,14 @@ describe("config.autosave", function()
   local function hidden(path, lines)
     local buf = vim.fn.bufadd(path)
     vim.fn.bufload(buf)
-    -- The stamp BufReadPost would have set. bufadd/bufload is used rather than
-    -- H.edit because entering the buffer is exactly what must not happen here.
-    vim.b[buf].autosave_mtime = vim.fn.getftime(path)
+    -- The stamp BufReadPost would have set — M.stat's own value, not a
+    -- hand-rolled one: the stamp is a {sec,nsec,size} table and a bare number is
+    -- deliberately treated as "no stamp" (see M.write), which would make every
+    -- staleness assertion below pass for the wrong reason.
+    --
+    -- bufadd/bufload rather than H.edit because entering the buffer is exactly
+    -- what must not happen here.
+    vim.b[buf].autosave_mtime = require("config.autosave").stat(path)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
     H.track_buf(buf)
     return buf
@@ -111,8 +116,12 @@ describe("config.autosave", function()
     local path = H.write(dir .. "/raced.txt", { "theirs" })
     local buf = hidden(path, { "ours" })
     -- Backdating the stamp stands in for an external rewrite without
-    -- depending on getftime's one-second resolution.
-    vim.b[buf].autosave_mtime = vim.fn.getftime(path) - 10
+    -- depending on the filesystem clock.
+    -- Read, mutate, assign back: indexing vim.b returns a *copy* of the table,
+    -- so `vim.b[buf].autosave_mtime.sec = …` would change nothing.
+    local stamp = vim.b[buf].autosave_mtime
+    stamp.sec = stamp.sec - 10
+    vim.b[buf].autosave_mtime = stamp
 
     local notes = H.capture_notifications(function()
       assert.is_false(write(buf))
@@ -129,6 +138,89 @@ describe("config.autosave", function()
     assert.is_true(notes[1].msg:find("raced.txt", 1, true) ~= nil)
     -- The message has to name the way out: nothing else will write this buffer.
     assert.is_true(notes[1].msg:find(":w to overwrite", 1, true) ~= nil)
+  end)
+
+  it("skips a hidden buffer whose file was deleted under it", function()
+    -- The hidden-buffer half of the same guard, and the one that bit: a rename
+    -- wipes and reloads buffers for the renamed path, so file_ops runs M.write
+    -- over a snapshot of bufnrs taken *before* the move. getftime returns -1 for
+    -- a missing file, which `-1 > known` read as "not newer" — so the old path
+    -- was recreated from the stale buffer and a moved Java class ended up
+    -- declared in two files at once.
+    local path = H.write(dir .. "/Gone.java", { "class Gone {}" })
+    local buf = hidden(path, { "class Gone { int x; }" })
+    assert.equals(0, vim.fn.delete(path))
+
+    local notes = H.capture_notifications(function()
+      assert.is_false(write(buf))
+    end)
+
+    assert.equals(0, vim.fn.filereadable(path))
+    assert.is_true(vim.bo[buf].modified)
+    assert.equals(1, #notes)
+    assert.is_true(notes[1].msg:find("no longer on disk", 1, true) ~= nil)
+  end)
+
+  it("skips a hidden buffer rewritten inside the stamp's second", function()
+    -- Same-second rewrites are invisible at one-second resolution, which is all
+    -- getftime has. The stamp carries nsec and size because that is what
+    -- Neovim's own buf_write compares, and a `git pull` landing in the same
+    -- second as the read is exactly how an LSP-rename edit would have been
+    -- written over someone else's content with no prompt and no warning.
+    local path = H.write(dir .. "/Raced.java", { "class Raced {}" })
+    local buf = hidden(path, { "class Raced { int ours; }" })
+    local stamp = vim.b[buf].autosave_mtime
+    vim.fn.writefile({ "class Raced { int theirs; }" }, path)
+    local now = require("config.autosave").stat(path)
+    assert.equals(stamp.sec, now.sec, "fixture needs the rewrite inside one second")
+
+    local notes = H.capture_notifications(function()
+      assert.is_false(write(buf))
+    end)
+
+    assert.same({ "class Raced { int theirs; }" }, vim.fn.readfile(path))
+    assert.equals(1, #notes)
+    assert.is_true(notes[1].msg:find("changed on disk", 1, true) ~= nil)
+  end)
+
+  it("skips a hidden buffer whose file's mtime moved backwards", function()
+    -- `>` only ever caught forward motion, and `git checkout`, `tar -x`,
+    -- `unzip`, `cp -p`, `rsync -a` and `touch -r` all restore an OLDER mtime.
+    local path = H.write(dir .. "/Restored.java", { "class Restored {}" })
+    local buf = hidden(path, { "class Restored { int ours; }" })
+    vim.fn.writefile({ "class Restored { int theirs; }" }, path)
+    local stamp = vim.b[buf].autosave_mtime
+    assert.is_true(vim.uv.fs_utime(path, stamp.sec - 3600, stamp.sec - 3600))
+
+    local notes = H.capture_notifications(function()
+      assert.is_false(write(buf))
+    end)
+
+    assert.same({ "class Restored { int theirs; }" }, vim.fn.readfile(path))
+    assert.equals(1, #notes)
+    assert.is_true(notes[1].msg:find("changed on disk", 1, true) ~= nil)
+  end)
+
+  it("treats a bare-number stamp from an older config as no stamp", function()
+    -- vim.b.autosave_mtime held a plain getftime() number before it grew a
+    -- shape, and a buffer stamped before a :source, a lazy re-config or a
+    -- Neovim upgrade still carries one. Indexing it raised *inside* the BufLeave
+    -- callback, which aborts the write and loses the edit — the exact outcome
+    -- the guard exists to prevent. Writing is the safe reading of an
+    -- unrecognised stamp; M.stamp re-establishes a real one on BufWritePost.
+    local path = H.write(dir .. "/Legacy.java", { "class Legacy {}" })
+    local buf = hidden(path, { "class Legacy { int x; }" })
+    vim.b[buf].autosave_mtime = vim.fn.getftime(path)
+
+    local notes = H.capture_notifications(function()
+      assert.is_true(write(buf))
+    end)
+
+    assert.same({ "class Legacy { int x; }" }, vim.fn.readfile(path))
+    assert.same({}, notes)
+    -- That the re-stamp then replaces it with a real one is asserted in
+    -- autocmds_spec's auto_save group, where auto_save_stamp is actually
+    -- loaded; this file drives M.write directly and has no autocmds behind it.
   end)
 
   it("writes a buffer that was never stamped", function()

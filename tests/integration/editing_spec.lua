@@ -73,8 +73,16 @@ describe("auto-save", function()
   it("refuses to overwrite a file that changed on disk after it was read", function()
     local path = H.write(dir .. "/shared.txt", { "original" })
     local buf = H.edit(path)
-    -- BufReadPost stamped the mtime; the guard compares against this.
-    assert.is_number(vim.b[buf].autosave_mtime)
+    -- BufReadPost stamped the on-disk identity; the guard compares against
+    -- this. A {sec,nsec,size} table and not a bare mtime: Neovim's own
+    -- buf_write compares all three with `!=`, and a one-sided second-resolution
+    -- check missed a same-second rewrite, an mtime moved backwards by
+    -- git/tar/rsync, and a file deleted outright.
+    local stamp = vim.b[buf].autosave_mtime
+    assert.is_table(stamp)
+    assert.is_number(stamp.sec)
+    assert.is_number(stamp.nsec)
+    assert.is_number(stamp.size)
 
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "my edit" })
     external_write(path, { "someone else's edit" })

@@ -563,9 +563,10 @@ describe("config.autocmds", function()
       local buf = H.edit(path)
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "edited" })
       -- Backdating the stamp is equivalent to the file having been rewritten
-      -- since it was read, without depending on getftime's one-second
-      -- resolution (a real rewrite inside the same second is invisible).
-      vim.b[buf].autosave_mtime = vim.fn.getftime(path) - 10
+      -- since it was read, without waiting on the filesystem clock.
+      local stamp = require("config.autosave").stat(path)
+      stamp.sec = stamp.sec - 10
+      vim.b[buf].autosave_mtime = stamp
 
       local notes = H.capture_notifications(function() H.scratch() end)
 
@@ -583,11 +584,86 @@ describe("config.autocmds", function()
       assert.equals(vim.log.levels.WARN, notes[1].level)
     end)
 
+    it("skips the write when the file was rewritten inside the same second", function()
+      -- The case a `getftime(name) > known` guard — what this used to be — is
+      -- blind to by construction: mtime is compared at one-second resolution, so
+      -- an external write landing in the same second as the read compares EQUAL
+      -- and the buffer silently clobbers it. The stamp now carries nanoseconds
+      -- and size, which is what Neovim's own buf_write compares.
+      local buf = H.edit(path)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "mine" })
+      -- Same wall-clock second as the stamp, different content.
+      local stamp = vim.b[buf].autosave_mtime
+      vim.fn.writefile({ "theirs from elsewhere" }, path)
+      local now = require("config.autosave").stat(path)
+      assert.equals(stamp.sec, now.sec, "fixture needs the rewrite inside one second")
+
+      local notes = H.capture_notifications(function() H.scratch() end)
+
+      assert.same({ "theirs from elsewhere" }, vim.fn.readfile(path))
+      assert.is_true(vim.bo[buf].modified)
+      assert.equals(1, #notes)
+      assert.is_true(notes[1].msg:find("changed on disk", 1, true) ~= nil)
+    end)
+
+    it("skips the write when the file's mtime moved backwards", function()
+      -- `tar -x`, `unzip`, `cp -p`, `rsync -a`, `git checkout` and `touch -r` all
+      -- restore an OLDER mtime, so `getftime(name) > known` was false and the
+      -- buffer overwrote the restored file. The comparison is now `~=`.
+      local buf = H.edit(path)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "mine" })
+      vim.fn.writefile({ "restored from an archive" }, path)
+      local stamp = vim.b[buf].autosave_mtime
+      assert.is_true(vim.uv.fs_utime(path, stamp.sec - 3600, stamp.sec - 3600))
+
+      local notes = H.capture_notifications(function() H.scratch() end)
+
+      assert.same({ "restored from an archive" }, vim.fn.readfile(path))
+      assert.equals(1, #notes)
+      assert.is_true(notes[1].msg:find("changed on disk", 1, true) ~= nil)
+    end)
+
+    it("refuses to recreate a file that was deleted or renamed away", function()
+      -- getftime returns -1 for a missing file, so `-1 > known` was false and the
+      -- buffer was written back: renaming Old.java to New.java in a terminal
+      -- split left BOTH on disk, i.e. two files declaring the same class and a
+      -- build that stops compiling with no edit to blame.
+      local buf = H.edit(path)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "edited" })
+      assert.equals(0, vim.fn.delete(path))
+
+      local notes = H.capture_notifications(function() H.scratch() end)
+
+      assert.equals(0, vim.fn.filereadable(path))
+      assert.is_true(vim.bo[buf].modified)
+      assert.equals(1, #notes)
+      assert.is_true(notes[1].msg:find("no longer on disk", 1, true) ~= nil)
+      assert.equals(vim.log.levels.WARN, notes[1].level)
+    end)
+
+    it("treats a stamp left by an older version of the config as no stamp", function()
+      -- vim.b.autosave_mtime held a bare getftime() number before the stamp grew
+      -- a shape. A buffer stamped before a :source/reload still carries one, and
+      -- indexing it raised inside the BufLeave callback — aborting the write and
+      -- losing the edit, which is the opposite of what the guard is for.
+      local buf = H.edit(path)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "edited" })
+      vim.b[buf].autosave_mtime = vim.fn.getftime(path)
+
+      local notes = H.capture_notifications(function() H.scratch() end)
+
+      assert.same({ "edited" }, vim.fn.readfile(path))
+      assert.same({}, notes)
+      -- And auto_save_stamp's BufWritePost replaced it with a real stamp, so the
+      -- guard is live again from here on rather than permanently bypassed.
+      assert.same(require("config.autosave").stat(path), vim.b[buf].autosave_mtime)
+    end)
+
     it("re-stamps after a write, so the next auto-save is not blocked", function()
       local buf = H.edit(path)
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "first" })
       vim.cmd("silent write") -- BufWritePost re-stamps
-      assert.equals(vim.fn.getftime(path), vim.b[buf].autosave_mtime)
+      assert.same(require("config.autosave").stat(path), vim.b[buf].autosave_mtime)
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "second" })
       H.scratch()
       -- Without the BufWritePost half of auto_save_stamp the stamp would
@@ -840,40 +916,148 @@ describe("config.autocmds", function()
       H.disable_autosave()
     end)
 
+    --- A stand-in jdtls client rooted at `root`, recording every exec_cmd call.
+    ---
+    --- A client *object* with a `config.root_dir` and an `exec_cmd` method,
+    --- because that is now the dispatch path: this used to guard on a global
+    --- get_clients({ name = "jdtls" }) and then send through
+    --- vim.lsp.buf.execute_command, which is buf_request(0, …) against the
+    --- CURRENT buffer's clients — and a build.gradle buffer is filetype `groovy`,
+    --- which jdtls never attaches to. So the guard passed, the toast appeared and
+    --- the request went to nobody. Spying on execute_command could not tell those
+    --- two worlds apart; only the client can.
+    ---
+    --- `root` is symlink-resolved, because a real root_dir is: jdtls's find_root
+    --- walks up from the buffer's name, and Neovim resolves symlinks when it
+    --- names a buffer. On macOS the test tmpdir is under /var, a symlink to
+    --- /private/var — so an unresolved root here matches nothing and every
+    --- assertion below would pass for the wrong reason.
+    local function fake_jdtls(root)
+      local calls = {}
+      return {
+        name = "jdtls",
+        config = { root_dir = vim.uv.fs_realpath(root) or root },
+        exec_cmd = function(_, cmd, opts)
+          table.insert(calls, { cmd = cmd, opts = opts })
+        end,
+        calls = calls,
+      }
+    end
+
     it("asks jdtls to update the project when a build file is saved", function()
-      local path = H.write(H.tmpdir("gradle") .. "/build.gradle", { "plugins {}" })
+      local dir = H.tmpdir("gradle")
+      local path = H.write(dir .. "/build.gradle", { "plugins {}" })
       local buf = H.edit(path)
-      local fake = { name = "jdtls" }
+      local fake = fake_jdtls(dir)
       H.stub(vim.lsp, "get_clients", function() return { fake } end)
-      local commands = H.spy(vim.lsp.buf, "execute_command")
 
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "plugins { }" })
       -- Real :write: BufWritePost is the event, and a real save also proves the
       -- pattern list actually matches a file named build.gradle.
       local notes = H.capture_notifications(function() vim.cmd("silent write") end)
 
-      assert.equals(1, commands.count)
+      assert.equals(1, #fake.calls)
       -- The exact command id and a file:// URI argument: jdtls silently
       -- ignores anything else, so a typo here looks like "refresh does
       -- nothing" while still printing the reassuring notification below.
-      assert.equals("java.projectConfiguration.update", commands[1][1].command)
-      assert.same({ vim.uri_from_fname(vim.uv.fs_realpath(path)) }, commands[1][1].arguments)
+      assert.equals("java.projectConfiguration.update", fake.calls[1].cmd.command)
+      local uri = fake.calls[1].cmd.arguments[1]
+      assert.equals(vim.uri_from_fname(vim.api.nvim_buf_get_name(buf)), uri)
+      assert.is_true(vim.startswith(uri, "file://"))
+      assert.is_true(vim.endswith(uri, "/build.gradle"))
+      -- The request must be routed to a buffer jdtls is actually attached to,
+      -- not to the groovy build-file buffer it was sent from.
+      assert.equals(buf, fake.calls[1].opts.bufnr)
       assert.equals(1, #notes)
       assert.equals(vim.log.levels.INFO, notes[1].level)
+    end)
+
+    it("sends to the client whose project the build file belongs to", function()
+      -- One session routinely holds several jdtls clients, one per multi-module
+      -- project. Reindexing the wrong one is useless *and* a multi-second Gradle
+      -- round trip, and the old "first client named jdtls" guard picked whichever
+      -- happened to start first.
+      local mine = H.tmpdir("gradle-mine")
+      local theirs = H.tmpdir("gradle-theirs")
+      local path = H.write(mine .. "/build.gradle", { "plugins {}" })
+      local buf = H.edit(path)
+      local other, ours = fake_jdtls(theirs), fake_jdtls(mine)
+      H.stub(vim.lsp, "get_clients", function() return { other, ours } end)
+
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "plugins { }" })
+      vim.cmd("silent write")
+
+      assert.equals(1, #ours.calls)
+      assert.equals(0, #other.calls)
+    end)
+
+    it("prefers the nested module over its aggregator", function()
+      -- A Gradle aggregator's root is a prefix of every module's, so both match.
+      -- The longest root wins: reindexing the aggregator does not pick up the
+      -- module's own dependency change.
+      local root = H.tmpdir("gradle-multi")
+      local module = root .. "/service"
+      vim.fn.mkdir(module, "p")
+      local path = H.write(module .. "/build.gradle", { "plugins {}" })
+      local buf = H.edit(path)
+      local aggregator, nested = fake_jdtls(root), fake_jdtls(module)
+      H.stub(vim.lsp, "get_clients", function() return { aggregator, nested } end)
+
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "plugins { }" })
+      vim.cmd("silent write")
+
+      assert.equals(1, #nested.calls)
+      assert.equals(0, #aggregator.calls)
+    end)
+
+    it("does not treat a name-prefixed sibling directory as the same project", function()
+      -- A bare string prefix says /…/app is an ancestor of /…/app-legacy, and
+      -- `app` / `app-legacy` / `app-e2e` siblings are the normal shape of a
+      -- repo. Saving app-legacy's build file reindexed `app` instead: a
+      -- multi-second Gradle round trip, a reassuring toast, and no effect on the
+      -- project actually edited.
+      local parent = H.tmpdir("gradle-siblings")
+      local sibling = parent .. "/app-legacy"
+      vim.fn.mkdir(sibling, "p")
+      vim.fn.mkdir(parent .. "/app", "p")
+      local path = H.write(sibling .. "/build.gradle", { "plugins {}" })
+      local buf = H.edit(path)
+      local app = fake_jdtls(parent .. "/app")
+      H.stub(vim.lsp, "get_clients", function() return { app } end)
+
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "plugins { }" })
+      local notes = H.capture_notifications(function() vim.cmd("silent write") end)
+
+      assert.equals(0, #app.calls)
+      assert.same({}, notes)
+    end)
+
+    it("does nothing when the build file is outside every jdtls project", function()
+      -- An open Java project plus a stray build.gradle from somewhere else: the
+      -- global guard saw a jdtls client, said "refreshing…" and sent the update
+      -- into a project that has never heard of the file.
+      local path = H.write(H.tmpdir("gradle-stray") .. "/build.gradle", { "plugins {}" })
+      local buf = H.edit(path)
+      local elsewhere = fake_jdtls(H.tmpdir("gradle-elsewhere"))
+      H.stub(vim.lsp, "get_clients", function() return { elsewhere } end)
+
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "plugins { }" })
+      local notes = H.capture_notifications(function() vim.cmd("silent write") end)
+
+      assert.equals(0, #elsewhere.calls)
+      assert.same({}, notes)
     end)
 
     it("does nothing when no jdtls client is attached", function()
       local path = H.write(H.tmpdir("gradle") .. "/build.gradle.kts", { "plugins {}" })
       local buf = H.edit(path)
       H.stub(vim.lsp, "get_clients", function() return {} end)
-      local commands = H.spy(vim.lsp.buf, "execute_command")
 
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "plugins { }" })
       local notes = H.capture_notifications(function() vim.cmd("silent write") end)
 
       -- Saving a build file in a non-Java session (or before jdtls starts)
       -- must not error or claim it refreshed anything.
-      assert.equals(0, commands.count)
       assert.same({}, notes)
     end)
   end)

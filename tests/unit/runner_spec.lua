@@ -381,6 +381,137 @@ describe("config.runner", function()
     end)
   end)
 
+  describe("DAP runs", function()
+    -- A plain Java target's main class is launched through nvim-dap, not a
+    -- terminal, so the whole running/stop story goes through dap.sessions()
+    -- rather than a job id. Both plugins are faked here because a real session
+    -- needs the Eclipse debug adapter and a compiled project; what is under test
+    -- is which session this module believes is ITS OWN, which is pure
+    -- bookkeeping.
+    local dap, configs
+
+    before_each(function()
+      configs = { { name = "App", mainClass = "com.example.App" } }
+      dap = {
+        sessions_table = {},
+        active = nil,
+        ran = {},
+        terminated = 0,
+        sessions = function() return dap.sessions_table end,
+        session = function() return dap.active end,
+        set_session = function(s) dap.active = s end,
+        run = function(config)
+          table.insert(dap.ran, config)
+          -- What nvim-dap does: the session carries its config verbatim, and is
+          -- registered under a unique incrementing id.
+          local s = { id = #dap.ran, config = config }
+          dap.sessions_table[s.id] = s
+          dap.active = s
+          return s
+        end,
+        terminate = function(_, _, cb)
+          dap.terminated = dap.terminated + 1
+          -- Only the ACTIVE session, which is why set_session has to come first.
+          if dap.active then dap.sessions_table[dap.active.id] = nil end
+          if cb then cb() end
+        end,
+      }
+      package.loaded["dap"] = dap
+      package.loaded["jdtls.dap"] = {
+        fetch_main_configs = function(_, cb) cb(configs) end,
+      }
+    end)
+
+    after_each(function()
+      package.loaded["dap"] = nil
+      package.loaded["jdtls.dap"] = nil
+      package.loaded["dapui"] = nil
+    end)
+
+    --- Launch the one main class in `dir` and hand back the runner and target.
+    local function launch(dir, mode)
+      local R = runner()
+      H.quiet_buffer(dir .. "/src/main/java/com/example/App.java", nil)
+      local target = target_of(R.targets(vim.fn.bufnr("%")), "java")
+      R.main_class(mode or "run")
+      -- fetch_main_configs' callback is wrapped in vim.schedule (the real one
+      -- arrives on the LSP's thread), so the launch has not happened yet.
+      vim.wait(200, function() return #dap.ran > 0 end)
+      return R, target
+    end
+
+    it("tags the launch with the target it belongs to", function()
+      local dir = H.fixture("java-plain")
+      local R, target = launch(dir)
+
+      assert.equals(1, #dap.ran)
+      assert.equals(target.id, dap.ran[1].__runner_id)
+      assert.equals("com.example.App", dap.ran[1].mainClass)
+      -- The adapter deserialises launch args with Gson, which ignores unknown
+      -- fields, so the extra key rides along harmlessly.
+      assert.is_true(R.is_running(target))
+    end)
+
+    it("copies the config rather than tagging jdtls's own table", function()
+      -- fetch_main_configs' tables come from jdtls and may be handed out again,
+      -- so stamping the id in place would make a second target inherit the
+      -- first one's — and then Stop on either would act on the other.
+      local dir = H.fixture("java-plain")
+      launch(dir)
+      assert.is_nil(configs[1].__runner_id)
+    end)
+
+    it("does not claim another project's live session as its own", function()
+      -- The bug: is_running answered from "is there any DAP session at all",
+      -- and dap.session() returns the ACTIVE one. Debugging a second project
+      -- made the first project's toolbar show Stop and Restart, and pressing
+      -- Stop terminated the session you were actually using.
+      local dir = H.fixture("java-plain")
+      local R, target = launch(dir)
+      -- Someone else's session becomes the active one.
+      dap.sessions_table[99] = { id = 99, config = { name = "Other project" } }
+      dap.active = dap.sessions_table[99]
+      assert.is_true(R.is_running(target), "its own session is still live")
+
+      -- Now its own session ends, leaving only the other project's.
+      dap.sessions_table[1] = nil
+      assert.is_false(R.is_running(target))
+    end)
+
+    it("forgets the run once its session is gone", function()
+      -- Self-healing instead of dap.listeners bookkeeping: dap.sessions() is an
+      -- accurate live set (nvim-dap's own on_close hook removes the entry), so
+      -- the absence of the session IS the end of the run. Without the cleanup
+      -- the dead entry sat in `jobs` for the session and Stop tripped over it.
+      local dir = H.fixture("java-plain")
+      local R, target = launch(dir)
+      dap.sessions_table = {}
+      assert.is_false(R.is_running(target))
+      -- Idempotent: a statusline redraw calls this on every tick.
+      assert.is_false(R.is_running(target))
+    end)
+
+    it("terminates its own session, not whichever one is active", function()
+      -- dap.terminate acts on the ACTIVE session only — its session-scoped form
+      -- is file-local to nvim-dap — so stopping the right one means making it
+      -- active first. dap.set_session is public for exactly this.
+      local dir = H.fixture("java-plain")
+      local R, target = launch(dir)
+      local ours = dap.sessions_table[1]
+      local theirs = { id = 99, config = { name = "Other project" } }
+      dap.sessions_table[99] = theirs
+      dap.active = theirs
+
+      H.capture_notifications(function() R.stop() end)
+
+      assert.equals(1, dap.terminated)
+      assert.equals(ours, dap.active, "terminated whatever happened to be active")
+      assert.is_nil(dap.sessions_table[1])
+      assert.equals(theirs, dap.sessions_table[99], "killed the other project's session")
+      assert.is_false(R.is_running(target))
+    end)
+  end)
+
   describe("without plugins", function()
     it("notifies instead of erroring when toggleterm is absent", function()
       -- This tier has no plugins, which is also a real state early in startup.

@@ -410,6 +410,37 @@ describe("ftplugin/java.lua", function()
       end
     end)
 
+    it("drops an unreadable bundle instead of losing the whole list", function()
+      -- One unreadable entry makes jdtls's loadBundles throw and abort the ENTIRE
+      -- list, which silently takes resolveMainClass, debugging and test-running
+      -- down with it — the same failure the test-jar exclusion above guards, from
+      -- a different direction. And the entry can go missing without this config
+      -- doing anything wrong: spring_boot.java_extensions() is somebody else's
+      -- list, and a mason update replaces jars while a session is open.
+      --
+      -- The name-based exclusion above cannot cover this: it drops jars that
+      -- exist but are not OSGi bundles, which is the opposite problem.
+      local sb_ok, spring_boot = pcall(require, "spring_boot")
+      if not sb_ok then return H.skip("spring-boot.nvim not available") end
+      local ghost = H.tmpdir("ghost-bundle") .. "/vanished.jar"
+      H.stub(spring_boot, "java_extensions", function() return { ghost } end)
+
+      open_java(java_project("ghost"))
+
+      assert.is_false(vim.tbl_contains(captured.init_options.bundles, ghost))
+      -- The rest of the list survived, which is the whole point.
+      assert.is_true(#captured.init_options.bundles > 0,
+        "one bad entry emptied the bundle list")
+      -- And it says WHICH one: an empty debug menu with no message is
+      -- indistinguishable from "this project has no main class".
+      local said
+      for _, n in ipairs(notifications) do
+        if n.msg:find("vanished.jar", 1, true) then said = n end
+      end
+      assert.is_not_nil(said, "dropped the bundle silently")
+      assert.equals(vim.log.levels.WARN, said.level)
+    end)
+
     it("answers _java.reloadBundles.command with the bundle list", function()
       local handler = vim.lsp.commands["_java.reloadBundles.command"]
       -- The server sends this via workspace/executeClientCommand and waits for a
@@ -465,7 +496,7 @@ describe("ftplugin/java.lua", function()
       assert.is_true(before > 0)
 
       -- FileType java re-fires on :e, :e!, :JdtRestart and JdtlsClean's own
-      -- `vim.cmd("edit")`. Stacking instead of replacing added another full
+      -- `doautocmd FileType`. Stacking instead of replacing added another full
       -- codeLens sweep per event (a references + implementations search over the
       -- whole file) — typing lag that got worse the longer the session ran.
       captured.on_attach(client, bufnr)
@@ -556,11 +587,46 @@ describe("ftplugin/java.lua", function()
       bufnr = select(1, open_java(java_project("clean")))
     end)
 
-    it("registers the command and its buffer-local mapping", function()
-      assert.is_not_nil(vim.api.nvim_get_commands({})["JdtlsClean"])
+    it("registers the command buffer-locally, like its mapping", function()
+      -- Buffer-local, NOT global. This file is re-sourced per java buffer and
+      -- `workspace_dir` is a per-project local, so a global command was
+      -- silently rebound on every java buffer opened and the one surviving
+      -- closure belonged to whichever project was sourced LAST. With two
+      -- projects open, :JdtlsClean from project A deleted project B's workspace
+      -- and left A's stale one exactly as it was — reporting success and fixing
+      -- nothing, while B had to re-import from scratch.
+      assert.is_not_nil(vim.api.nvim_buf_get_commands(bufnr, {})["JdtlsClean"])
+      assert.is_nil(vim.api.nvim_get_commands({})["JdtlsClean"])
       local map = H.keymap("n", "<leader>jc", bufnr)
       assert.is_not_nil(map)
       assert.equals(1, map.buffer)
+    end)
+
+    it("wipes the workspace of the project the command was run from", function()
+      -- Two projects open at once, which is the case that exposed the global
+      -- command: the second buffer's sourcing used to overwrite the first's
+      -- closure, so running it from the FIRST buffer wiped the second's
+      -- workspace.
+      local first_workspace = captured.cmd[#captured.cmd]
+      local second = select(1, open_java(java_project("clean-two")))
+      local second_workspace = captured.cmd[#captured.cmd]
+      assert.not_equals(first_workspace, second_workspace)
+
+      H.write(first_workspace .. "/.metadata/marker", { "stale" })
+      H.write(second_workspace .. "/.metadata/marker", { "stale" })
+      H.stub(vim.lsp, "get_clients", function() return {} end)
+
+      -- Back to the first buffer and clean from there.
+      vim.api.nvim_set_current_buf(bufnr)
+      H.capture_notifications(function()
+        vim.cmd("JdtlsClean")
+        vim.wait(200)
+      end)
+
+      assert.equals(0, vim.fn.filereadable(first_workspace .. "/.metadata/marker"))
+      assert.equals(1, vim.fn.filereadable(second_workspace .. "/.metadata/marker"),
+        "cleaned the other project's workspace")
+      assert.is_true(vim.api.nvim_buf_is_valid(second))
     end)
 
     it("wipes the workspace directory it was given", function()
@@ -582,11 +648,44 @@ describe("ftplugin/java.lua", function()
       end)
 
       assert.same({ workspace, "rf" }, deletes[1])
-      -- The directory itself is back: the command schedules `vim.cmd("edit")`,
-      -- which re-runs this ftplugin and re-creates the workspace before jdtls
-      -- starts. What must be gone is its CONTENTS — a stale .metadata is exactly
-      -- what makes Lombok/dependency changes fail to take effect.
+      -- The directory itself is back: the command schedules a
+      -- `doautocmd FileType`, which re-runs this ftplugin and re-creates the
+      -- workspace before jdtls starts. What must be gone is its CONTENTS — a
+      -- stale .metadata is exactly what makes Lombok/dependency changes fail to
+      -- take effect.
       assert.equals(0, vim.fn.filereadable(workspace .. "/.metadata/marker"))
+    end)
+
+    it("restarts on a modified buffer without losing the unsaved edit", function()
+      -- This used to restart with a bare `:edit`, which aborts with E37 "No
+      -- write since last change" on a modified buffer — and modified is the
+      -- common case, because you reach for :JdtlsClean precisely when
+      -- completion has gone dead mid-edit. So the wipe happened, the restart
+      -- did not, and the project came back with no server at all until the file
+      -- was saved and reopened by hand. `doautocmd FileType` re-sources the
+      -- ftplugin and leaves the unsaved lines untouched.
+      local workspace = captured.cmd[#captured.cmd]
+      vim.api.nvim_buf_set_lines(bufnr, 0, 1, false, { "package com.example; // unsaved" })
+      assert.is_true(vim.bo[bufnr].modified)
+      H.stub(vim.lsp, "get_clients", function() return {} end)
+
+      local started = 0
+      H.spy(jdtls, "start_or_attach", function(config)
+        captured = config
+        started = started + 1
+      end)
+      H.capture_notifications(function()
+        vim.cmd("JdtlsClean")
+        vim.wait(300)
+      end)
+
+      -- The restart really happened, i.e. the ftplugin was re-sourced…
+      assert.is_true(started > 0, "the ftplugin was never re-sourced")
+      assert.equals(1, vim.fn.isdirectory(workspace))
+      -- …and the edit that was in flight is still there, unwritten.
+      assert.is_true(vim.bo[bufnr].modified)
+      assert.equals("package com.example; // unsaved",
+        vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1])
     end)
 
     it("waits for the server to detach before wiping", function()
@@ -594,7 +693,10 @@ describe("ftplugin/java.lua", function()
       local srv = fake_lsp.start({
         name = "jdtls",
         bufnr = bufnr,
-        root_dir = H.tmpdir("clean-root"),
+        -- This project's root, not an arbitrary tmpdir: the command now filters
+        -- clients by root_dir, so a client rooted elsewhere is correctly
+        -- ignored and the spec would exercise the no-clients path instead.
+        root_dir = captured.root_dir,
         capabilities = fake_lsp.caps.full,
       })
       H.track_client(srv.id)
@@ -617,6 +719,40 @@ describe("ftplugin/java.lua", function()
       -- half-built index, so the wipe must not happen until it is gone.
       assert.equals(1, stopped.count)
       assert.equals(1, vim.fn.isdirectory(workspace))
+    end)
+
+    it("stops only this project's clients, not every jdtls in the session", function()
+      -- One Neovim session routinely holds several jdtls clients, one per
+      -- multi-module project. The unfiltered get_clients({ name = "jdtls" })
+      -- force-stopped all of them, so cleaning one project's workspace killed
+      -- completion in every other Java project open — each then paying a full
+      -- Gradle/Maven re-import to come back.
+      local mine = fake_lsp.start({
+        name = "jdtls",
+        bufnr = bufnr,
+        root_dir = captured.root_dir,
+        capabilities = fake_lsp.caps.full,
+      })
+      H.track_client(mine.id)
+      local other_buf = H.scratch({ lines = { "x" } })
+      local other = fake_lsp.start({
+        name = "jdtls",
+        bufnr = other_buf,
+        root_dir = H.tmpdir("other-project"),
+        capabilities = fake_lsp.caps.full,
+      })
+      H.track_client(other.id)
+      vim.api.nvim_set_current_buf(bufnr)
+
+      local mine_stopped = H.spy(mine.client, "stop")
+      local other_stopped = H.spy(other.client, "stop")
+      H.capture_notifications(function()
+        vim.cmd("JdtlsClean")
+        vim.wait(100)
+      end)
+
+      assert.equals(1, mine_stopped.count)
+      assert.equals(0, other_stopped.count)
     end)
   end)
 end)

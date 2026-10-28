@@ -57,7 +57,12 @@ local GATED = {
   { lhs = "gr", mode = "n", cap = "referencesProvider" },
   { lhs = "gi", mode = "n", cap = "implementationProvider" },
   { lhs = "<leader>lt", mode = "n", cap = "typeDefinitionProvider" },
-  { lhs = "<C-k>", mode = "n", cap = "signatureHelpProvider" },
+  -- <leader>lk, NOT normal-mode <C-k>: that is window-up, one of the
+  -- <C-h/j/k/l> set in lua/config/keymaps.lua, and a buffer-local mapping always
+  -- beats a global one — so an LSP <C-k> here killed window-up in exactly the
+  -- buffers it is used in while <C-h/j/l> kept working. Not <M-k> either, which
+  -- is move-line-up in normal mode.
+  { lhs = "<leader>lk", mode = "n", cap = "signatureHelpProvider" },
   -- Insert mode as well, and <M-k> rather than insert <C-k>: cmp owns insert
   -- <C-k> for select_prev_item, so a buffer-local insert <C-k> here would
   -- shadow cmp's global one and break menu navigation.
@@ -82,7 +87,7 @@ local GATED = {
 local INVOCABLE = {
   { lhs = "K", method = "textDocument/hover" },
   { lhs = "gD", method = "textDocument/declaration" },
-  { lhs = "<C-k>", method = "textDocument/signatureHelp" },
+  { lhs = "<leader>lk", method = "textDocument/signatureHelp" },
   { lhs = "<leader>ca", method = "textDocument/codeAction" },
   { lhs = "<leader>lc", method = "textDocument/prepareCallHierarchy" },
 }
@@ -183,13 +188,19 @@ describe("lsp on_attach", function()
     attach("full_ls", fake_lsp.caps.full)
 
     -- Signature help is the one mapping that exists in two modes, under two
-    -- different keys. Crossing them over is silent: <C-k> in insert mode is
-    -- cmp's select_prev_item, so a stray insert-mode <C-k> here breaks menu
-    -- navigation without any error message.
-    assert.is_not_nil(buf_map("n", "<C-k>", bufnr))
-    assert.is_nil(buf_map("i", "<C-k>", bufnr))
+    -- different keys, and both of the obvious choices are already taken by
+    -- something a buffer-local mapping would silently shadow.
+    assert.is_not_nil(buf_map("n", "<leader>lk", bufnr))
     assert.is_not_nil(buf_map("i", "<M-k>", bufnr))
+    -- Normal <C-k> is window-up (<C-h/j/k/l>) and normal <M-k> is move-line-up,
+    -- both global in lua/config/keymaps.lua; insert <C-k> is cmp's
+    -- select_prev_item. A buffer-local mapping beats a global one, so each of
+    -- these would be a silent loss of an existing key in every buffer with a
+    -- signatureHelp-capable server — i.e. every file you actually edit.
+    assert.is_nil(buf_map("n", "<C-k>", bufnr))
+    assert.is_nil(buf_map("i", "<C-k>", bufnr))
     assert.is_nil(buf_map("n", "<M-k>", bufnr))
+    assert.is_nil(buf_map("i", "<leader>lk", bufnr))
   end)
 
   it("reaches a client started outside the vim.lsp.enable path", function()
@@ -418,6 +429,57 @@ describe("lsp on_attach", function()
     vim.wait(50)
 
     assert.is_not_nil(buf_map("n", "<leader>ca", bufnr))
+  end)
+
+  it("takes every gated mapping back when the last client detaches", function()
+    -- gate() only ever ran from on_attach, i.e. while a client was *arriving*,
+    -- so nothing removed its mappings when one left. A buffer whose server had
+    -- crashed, been :LspStop'd or been reaped by lsp_reap kept all ~15 of them,
+    -- each now answering "server does not support …" — and <C-t> is the pointed
+    -- one, because it stayed shadowed and the built-in tag-stack pop never came
+    -- back. Only a restart cleared them.
+    local srv = attach("leaving_ls", fake_lsp.caps.full)
+    for _, m in ipairs(GATED) do
+      assert.is_not_nil(buf_map(m.mode, m.lhs, bufnr),
+        ("%s (%s) should be mapped before the detach"):format(m.lhs, m.mode))
+    end
+
+    srv.stop()
+    H.wait_for("LspDetach ran", function()
+      return buf_map("n", "<leader>ca", bufnr) == nil
+    end)
+
+    for _, m in ipairs(GATED) do
+      assert.is_nil(buf_map(m.mode, m.lhs, bufnr),
+        ("%s (%s) should be gone after the last client left"):format(m.lhs, m.mode))
+    end
+    -- Also gone: <C-t>, which on_attach shadows to pop the Telescope-driven
+    -- definition stack. It is not in GATED because it is not gated on a
+    -- capability, but leaving it behind permanently breaks the builtin.
+    assert.is_nil(buf_map("n", "<C-t>", bufnr))
+  end)
+
+  it("keeps a gated mapping when another client still supports it", function()
+    -- The detach predicate is not "did the leaving client support it": ts_ls +
+    -- eslint on one buffer is the everyday case, and eslint stopping must not
+    -- take away ts_ls's gr/gi/<leader>ca. The leaving client is excluded from
+    -- the count explicitly, because at LspDetach time it is still attached as
+    -- far as get_clients is concerned.
+    attach("staying_ls", fake_lsp.caps.full)
+    local going = attach("going_ls", fake_lsp.caps.full)
+
+    going.stop()
+    H.wait_for("the leaving client is gone", function()
+      return not vim.lsp.get_client_by_id(going.id)
+    end)
+    -- Nothing to wait for on the mapping side — the assertion is that it never
+    -- went away — so give the detach handler a tick to have done its worst.
+    vim.wait(50)
+
+    for _, m in ipairs(GATED) do
+      assert.is_not_nil(buf_map(m.mode, m.lhs, bufnr),
+        ("%s (%s) must survive a second client leaving"):format(m.lhs, m.mode))
+    end
   end)
 
   it("collapses a burst of registrations into one re-run per buffer", function()

@@ -40,6 +40,28 @@ M.idle_timeout_ms = 5 * 60 * 1000
 --- is one interval wider than idle_timeout_ms.
 M.sweep_interval_ms = 60 * 1000
 
+--- How long a reclaimed server gets to shut down gracefully before it is killed.
+---
+--- Client:stop() with no argument defaults to `exit_timeout`, which defaults to
+--- `false` (runtime lsp/client.lua:411) — and `false` means neither the
+--- `force == true` nor the `type(force) == 'number'` branch runs, so all that is
+--- ever sent is a `shutdown` request. That is exactly the case this module exists
+--- for: a jdtls wedged on a Gradle import (or a boot-ls stuck resolving a
+--- classpath) does not answer it, the JVM stays resident with its whole heap, and
+--- since `_is_stopping` makes is_stopped() true immediately the guard in sweep()
+--- below then hides it from every later pass. The leak it was written to stop
+--- survived it, permanently and invisibly.
+---
+--- A number rather than `true`: nvim's own doc on stop() warns that force-killing
+--- a server mid-write "can lead to file corruption", and jdtls flushes its index
+--- and project metadata to the -data workspace on shutdown — a corrupted
+--- workspace is a worse outcome than a few seconds of resident JVM, and
+--- ftplugin/java.lua's :JdtlsClean is then the only way out. 10s is ample for a
+--- healthy server (a graceful jdtls exit is well under a second, measured) and
+--- nobody is waiting on it: this runs on a background timer after five minutes of
+--- the project being closed.
+M.exit_timeout_ms = 10 * 1000
+
 --- client id -> clock reading when it was first seen with no live buffer.
 local idle_since = {}
 local scheduled = false
@@ -92,7 +114,7 @@ function M.sweep(now)
       elseif now - idle_since[client.id] >= M.idle_timeout_ms then
         idle_since[client.id] = nil
         table.insert(stopped, client.name)
-        client:stop()
+        client:stop(M.exit_timeout_ms)
       else
         live = true
       end

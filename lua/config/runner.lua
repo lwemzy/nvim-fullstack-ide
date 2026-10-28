@@ -70,6 +70,15 @@ local run_terms = {}
 
 --- Is this terminal's process still running? Nil-safe, because a reaped or
 --- never-spawned Terminal has no job_id.
+---
+--- Deliberately not shared with lua/plugins/terminal.lua's <C-\> handler, which
+--- has a similar-looking question: this one is "has the process exited" (run
+--- terminals keep their buffer afterwards, close_on_exit = false, so that is the
+--- only thing that distinguishes a finished build from a running one), and that
+--- one is "can I still write to this channel" — different answers for a terminal
+--- whose shell has exited, and jobwait pumps pending exit callbacks, which
+--- inside a keymap callback means an unrelated terminal's close can take the
+--- keypress down with it.
 local function term_live(term)
   if not (term and term.job_id) then return false end
   -- jobwait with a 0 timeout polls: -1 means still running, anything else (exit
@@ -424,22 +433,60 @@ end
 -- keep its own Stop button.
 local jobs = {}
 
-local function dap_session()
+--- The key java_main stamps into a DAP configuration so the session it produces
+--- can be matched back to the registry entry that asked for it.
+---
+--- A session carries its configuration verbatim (`session.config`), and the java
+--- debug adapter deserialises launch arguments with Gson, which ignores fields it
+--- does not know — so an extra key rides along harmlessly and survives the one
+--- trip it has to survive.
+local RUNNER_ID = "__runner_id"
+
+--- The live DAP session started for registry id `id`, or nil.
+---
+--- Identity, not `dap.session() ~= nil`, which is what this used to be and which
+--- answers a different question: "is ANY debug session live anywhere". Nothing
+--- ever cleared a dap entry from `jobs` either — `java_main` writes one and only
+--- M.stop's own paths remove it — so the two faults compounded. Run a main class,
+--- let it finish, then start any unrelated debug session (a jest test, a Chrome
+--- attach, another project's main) and the finished target reported itself as
+--- running again: Run refused with "already running", and Stop terminated that
+--- unrelated session instead.
+---
+--- dap.sessions() is an accurate live set rather than a log: nvim-dap's own
+--- on_close hook does `sessions[s.id] = nil` (dap.lua:452-459), so a session that
+--- ended — cleanly, by crash, or by adapter disconnect — is gone from it with no
+--- event listener on our side to miss. That is why this is a poll and not
+--- bookkeeping, matching the terminal half.
+local function dap_session_for(id)
   local ok, dap = pcall(require, "dap")
-  return ok and dap.session() or nil
+  if not ok then return nil end
+  for _, s in pairs(dap.sessions()) do
+    if (s.config or {})[RUNNER_ID] == id then return s end
+  end
+  return nil
 end
 
 --- Is `target` running right now?
 ---
 --- Asked on every statusline redraw, so it must be a poll and not a search: a
---- terminal job is one non-blocking jobwait, and a DAP launch is one table read
---- inside nvim-dap.
+--- terminal job is one non-blocking jobwait, and a DAP launch is a scan of a
+--- table that holds one entry at most in normal use.
 function M.is_running(target)
   if not target then return false end
   local job = jobs[target.id]
   if not job then return false end
   if job.term then return term_live(job.term) end
-  if job.dap then return dap_session() ~= nil end
+  if job.dap then
+    if dap_session_for(target.id) then return true end
+    -- Self-healing, and the reason no dap.listeners bookkeeping is needed: the
+    -- session is gone, so the entry is dead and is dropped here rather than left
+    -- for M.stop to trip over. Mutating from a predicate that the statusline
+    -- calls is deliberate — this is the only place that learns a DAP run has
+    -- ended, and it costs one table write per redraw at most once per run.
+    jobs[target.id] = nil
+    return false
+  end
   return false
 end
 
@@ -535,7 +582,10 @@ local function java_main(target, mode)
 
   local function launch(config)
     jobs[target.id] = { target = target, dap = true, mode = mode }
-    require("dap").run(config)
+    -- Copied rather than mutated in place: fetch_main_configs' tables come from
+    -- jdtls and may be handed out again, and a second target must not inherit
+    -- the first one's id.
+    require("dap").run(vim.tbl_extend("force", config, { [RUNNER_ID] = target.id }))
     -- dapui is opened explicitly rather than left to the global
     -- event_initialized listener: a noDebug launch does not reliably fire that
     -- event the way a real debug session does, so the panel showing the
@@ -655,19 +705,84 @@ function M.tool_cmd(target)
   return tool_cmd(target.dir, target.tool)
 end
 
---- Run a one-off build command for `target` — a task from the picker, not the
+--- Already running? Then show the one that is running and say so, rather than
+--- starting a second copy — two bootRuns fight over port 8080 and the second dies
+--- with an error about the first. Returns true when it handled the press.
+---
+--- Shared by M.run and M.run_task because the task picker can start the very same
+--- process the toolbar's Run does (see starts_app), so the two have to answer a
+--- second press identically.
+local function showed_running(target)
+  if not M.is_running(target) then return false end
+  local job = jobs[target.id]
+  if job.term then pcall(function() job.term:open() end) end
+  vim.notify(target.label .. " is already running", vim.log.levels.INFO)
+  return true
+end
+
+--- Does `cmd` START the application rather than build it?
+---
+--- The picker in lua/config/tasks.lua lists `bootRun` in every Gradle build and
+--- `spring-boot:run` in every Maven one, plus whatever scripts the project's
+--- package.json declares — so the tasks it offers include long-lived processes,
+--- not only build steps. Those all went through M.run_task, which registers
+--- nothing, so they had no Stop and no Restart: ending one meant finding its
+--- terminal and pressing Ctrl-C, and the toolbar's Run afterwards cheerfully
+--- started a SECOND copy that died on the port the first still held.
+---
+--- Matched on the command, because that is what run_task is handed — tasks.lua
+--- has already turned the task name into `'/abs/gradlew' bootRun` or `npm run
+--- dev`, and reaching back for the name would mean changing its signature and
+--- both of its call sites.
+---
+--- Whole words, not substrings, and the two ecosystems' colon conventions point
+--- in OPPOSITE directions — which is the only subtle thing here:
+---
+---  * Gradle qualifies a task with its project path, so the task name is the LAST
+---    colon-separated segment: `:api:bootRun` is bootRun, `bootRunTests` is not.
+---  * npm namespaces a script with a suffix, so the script name is the FIRST:
+---    `start:prod` and `serve:ssr` do start the application, while `dev-tools`,
+---    `prestart` and `serveless` are builds that merely contain a start word.
+---
+--- A frontier pattern (`%f[%w]dev%f[%W]`) was the first attempt and gets
+--- `dev-tools` wrong, because `-` is a non-word character and therefore reads as
+--- a boundary — so every hyphenated build script was registered as the running
+--- application, taking the toolbar's Stop and Restart away from the real one.
+---
+--- NODE_SCRIPTS rather than a second list of script names: it is already this
+--- module's answer to "which npm script starts the application", used by
+--- node_script() for exactly that.
+local function starts_app(cmd)
+  for word in cmd:gmatch("%S+") do
+    if word == "spring-boot:run" then return true end
+    if (word:match("([^:]+)$") or word) == "bootRun" then return true end
+    local script = word:match("^([^:]+)") or word
+    if vim.tbl_contains(NODE_SCRIPTS, script) then return true end
+  end
+  return false
+end
+
+--- Run a build command for `target` — a task from the picker rather than the
 --- project's own run.
 ---
---- Deliberately NOT registered in `jobs`: that table is what the toolbar's
---- Stop/Restart buttons act on and what M.is_running answers from, and
---- `gradlew test` is not the application running. Registering it would offer a
---- Restart button that restarts bootRun instead of the test, and would make Run
---- refuse to start ("already running") while a test was in progress.
+--- A build step is deliberately NOT registered in `jobs`: that table is what the
+--- toolbar's Stop/Restart act on and what M.is_running answers from, and `gradlew
+--- test` is not the application running. Registering it would offer a Restart
+--- button that restarts bootRun instead of the test, and would make Run refuse to
+--- start while a test was in progress.
 ---
---- It still gets build_env and the quickfix capture, which are the two things
---- that make a task useful rather than just a terminal with a command typed in.
+--- A task that *is* the run (starts_app) is registered, under the target's own id
+--- — because it is the same process the toolbar's Run starts, so sharing the entry
+--- is what makes its Stop button stop it and keeps Run from double-starting it.
+---
+--- Either way it gets build_env and the quickfix capture, which are the two
+--- things that make a task useful rather than a terminal with a command typed in.
 function M.run_task(target, cmd)
   if not target then return nil end
+  if starts_app(cmd) then
+    if showed_running(target) then return nil end
+    return start_terminal(target, cmd, "run")
+  end
   return build_terminal(target, cmd)
 end
 
@@ -676,15 +791,9 @@ function M.run(kind, source)
   local target = M.target(kind, source)
   if not target then return no_target() end
 
-  if M.is_running(target) then
-    -- Not a second copy: two bootRuns fight over port 8080 and the second dies
-    -- with an error about the first. Show the one that is running instead — the
-    -- user pressing Run on something already running wants to see it.
-    local job = jobs[target.id]
-    if job.term then pcall(function() job.term:open() end) end
-    vim.notify(target.label .. " is already running", vim.log.levels.INFO)
-    return
-  end
+  -- The user pressing Run on something already running wants to see it, not a
+  -- second copy of it.
+  if showed_running(target) then return end
 
   if target.kind == "java" then return java_main(target, "run") end
   return start_terminal(target, target.cmd, "run")
@@ -710,6 +819,14 @@ function M.stop(kind, source, cb)
     -- process and disconnecting would leave it running with nothing attached.
     local dap = require("dap")
     jobs[target.id] = nil
+    -- dap.terminate acts on the ACTIVE session, which is not necessarily this
+    -- target's: a second debug session (another project's main class, a jest
+    -- run, a Chrome attach) becomes the active one just by starting, and Stop
+    -- then killed that instead while leaving this target's JVM running. Making
+    -- ours active first is the only way to say "this one" through the public API
+    -- — dap.lua's session-scoped terminate is a file-local.
+    local ours = dap_session_for(target.id)
+    if ours and dap.session() ~= ours then dap.set_session(ours) end
     return dap.terminate(nil, nil, function()
       M.refresh()
       if cb then cb() end

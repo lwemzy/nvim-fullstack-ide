@@ -15,12 +15,33 @@ local S = require("helpers.specs")
 --- call) need the source rather than the evaluated table.
 local read_text = H.read_text
 
---- Files whose raw text the Cmd-key ban applies to: the plugin specs plus the
---- global keymap table, which is where a Mac binding would most plausibly land.
+--- Files whose raw text the Cmd-key ban applies to: every Lua file in the config
+--- except the tests themselves.
+---
+--- Globbed rather than enumerated, which is the whole point of this version. It
+--- used to be `lua/plugins/*.lua` plus `lua/config/keymaps.lua` — the two places
+--- a Mac binding was expected to land — and a mutation test proved three
+--- keymap-bearing files were invisible to it: `ftplugin/java.lua` (which sets
+--- around thirty buffer-local mappings), `lua/claude_cli.lua` and
+--- `lua/config/autocmds.lua`. A ban that only covers the files somebody
+--- remembered to list is not a ban, and the failure is silent on this branch and
+--- loud only on the user's Linux machine.
+---
+--- tests/ is excluded because a spec may legitimately name the keycode it is
+--- asserting about; nothing under it can bind a key in the running config.
 local function keymap_sources()
-  local files = S.files()
-  table.insert(files, vim.fn.fnamemodify(S.plugins_dir, ":h") .. "/config/keymaps.lua")
-  return files
+  local root = vim.fn.fnamemodify(S.plugins_dir, ":h:h")
+  local files = vim.fn.glob(root .. "/**/*.lua", true, true)
+  vim.list_extend(files, vim.fn.glob(root .. "/*.lua", true, true))
+  local out, seen = {}, {}
+  for _, f in ipairs(files) do
+    if not seen[f] and not f:find(root .. "/tests/", 1, true) then
+      seen[f] = true
+      table.insert(out, f)
+    end
+  end
+  table.sort(out)
+  return out
 end
 
 --- Why a "owner/repo" short name is malformed, or nil if it is well-formed.
@@ -239,12 +260,16 @@ describe("lua/plugins specs", function()
       end
     end)
 
-    it("mentions no Cmd binding anywhere in the plugin or keymap sources", function()
+    it("mentions no Cmd binding anywhere in the config's Lua sources", function()
       -- The keys-entry check above misses every vim.keymap.set call inside a
       -- `config` function (terminal.lua, tools.lua and treesitter.lua all map
-      -- keys that way) and all of lua/config/keymaps.lua, which is where a Mac
-      -- binding would most likely be added.
-      for _, file in ipairs(keymap_sources()) do
+      -- keys that way), all of lua/config/keymaps.lua, and every ftplugin.
+      local files = keymap_sources()
+      -- The glob is the assertion's coverage, so an empty or suspiciously small
+      -- list has to fail rather than pass vacuously.
+      assert.is_true(#files > 20,
+        ("keymap_sources() found only %d files — the glob is broken"):format(#files))
+      for _, file in ipairs(files) do
         local text = read_text(file)
         assert.is_nil(text:find("<[dD]%-"),
           ("%s contains a Mac Cmd (<D-...>) binding"):format(file))

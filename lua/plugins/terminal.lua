@@ -30,11 +30,39 @@ return {
         if vim.bo.buftype ~= "terminal" then
           local dir = vim.fn.expand("%:p:h")
           if dir ~= "" and vim.fn.isdirectory(dir) == 1 then
-            if main_term.job_id then
-              -- Already running: actually `cd` the live shell.
-              main_term:change_dir(dir)
-            else
-              -- Not spawned yet: this becomes termopen()'s initial cwd.
+            -- Hand-rolled instead of main_term:change_dir(dir), because
+            -- toggleterm's implementation is `self:send(fmt("cd %s", dir))` with
+            -- no quoting at all (terminal.lua:346-351). `dir` comes from
+            -- expand("%:p:h"), so an ordinary path with a space in it left the
+            -- shell in its previous directory — every later `git commit` or
+            -- `mvn test` you typed then ran against the wrong project, with
+            -- nothing on screen to say so — and a directory name containing `;`
+            -- executed whatever followed it. shellescape is what the rest of
+            -- this config already uses for shell words (see
+            -- lua/config/runner.lua and lua/config/tasks.lua).
+            --
+            -- The early-out that change_dir does is reproduced too, so repeated
+            -- toggles in one directory still send nothing: without it every
+            -- toggle dropped a `cd` and a `clear` into the shell, wiping the
+            -- output of whatever had just been run there.
+            if main_term.dir ~= dir then
+              if main_term.job_id then
+                -- pcall, because job_id does not mean the channel is still
+                -- writable: toggleterm never clears it when a shell exits, and
+                -- close_on_exit (on, from setup above) means typing `exit`
+                -- deletes the buffer and with it the channel. Sending into that
+                -- throws E900 out of this callback before toggle() runs, so
+                -- after exiting the shell once <C-\> opened no terminal at all
+                -- for the rest of the session. Nothing to report when it fails:
+                -- the assignment below is the recovery.
+                pcall(function()
+                  main_term:send("cd " .. vim.fn.shellescape(dir))
+                  main_term:clear()
+                end)
+              end
+              -- Either way `dir` is the terminal's directory now: a live shell
+              -- has just been told to cd there, and a dead or never-spawned one
+              -- gets it as termopen()'s cwd when toggle() below spawns it.
               main_term.dir = dir
             end
           end

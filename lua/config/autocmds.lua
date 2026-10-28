@@ -181,15 +181,12 @@ autocmd("LspAttach", {
   end,
 })
 
--- Track the on-disk mtime we last synced with, so auto-save can tell whether
--- the file changed underneath us.
-local function stamp(buf)
-  local name = vim.api.nvim_buf_get_name(buf)
-  if name ~= "" then vim.b[buf].autosave_mtime = vim.fn.getftime(name) end
-end
+-- Track the on-disk identity we last synced with, so auto-save can tell whether
+-- the file changed underneath us. The stamping and the comparison live together
+-- in lua/config/autosave.lua so the shape of the stored value has one owner.
 autocmd({ "BufReadPost", "BufWritePost" }, {
   group = augroup("auto_save_stamp", { clear = true }),
-  callback = function(ev) stamp(ev.buf) end,
+  callback = function(ev) require("config.autosave").stamp(ev.buf) end,
 })
 
 -- Save when focus is lost or when switching away from a buffer.
@@ -206,12 +203,66 @@ autocmd({ "BufReadPost", "BufWritePost" }, {
 -- lua/config/autosave.lua. It is shared rather than inline because an LSP-aware
 -- rename (lua/config/file_ops.lua) has to write the same way, for buffers that
 -- are not the current one.
+--
+-- nested = true is load-bearing, not hygiene. Without it this :write fires NO
+-- BufWritePre/BufWritePost at all, which breaks three things at once and all of
+-- them silently:
+--
+--   * auto_save_stamp above never re-stamps, so from the SECOND edit onward the
+--     staleness guard in autosave.lua sees a file whose mtime has moved (we
+--     moved it) and refuses to write, blaming an external change that never
+--     happened. Every later edit is then lost on :q! or a crash.
+--   * auto_create_dir (BufWritePre, below) never runs, so a new file in a
+--     not-yet-existing directory is discarded.
+--   * conform's format_after_save (BufWritePost) never runs, so auto-saved
+--     buffers are the only ones that skip format-on-save.
 autocmd({ "FocusLost", "BufLeave" }, {
   group = augroup("auto_save", { clear = true }),
+  nested = true,
   callback = function()
     require("config.autosave").write(vim.api.nvim_get_current_buf())
   end,
 })
+
+-- The jdtls client whose project contains `path`, or nil.
+--
+-- Scoped by path and NOT by buffer, which is the whole point: both callers
+-- below run on a BufWritePost for a file jdtls is not attached to. A
+-- build.gradle buffer is filetype `groovy` (build.gradle.kts is `kotlin`,
+-- gradle.properties is `jproperties`) and jdtls only attaches to `java`, so
+-- java_source.lua's buffer-scoped jdtls_client() cannot be reused here.
+--
+-- That mismatch was a live bug: these two autocmds guarded on a GLOBAL
+-- get_clients({ name = "jdtls" }) and then dispatched through
+-- vim.lsp.buf.execute_command, which is buf_request(0, …) against the CURRENT
+-- buffer's clients. The guard passed, the "refreshing…" toast appeared, and the
+-- request was never sent to anybody — so saving a build file has never actually
+-- reindexed anything. Sending through the client object fixes the routing and
+-- drops a deprecated API (execute_command is slated for removal in 0.12) at the
+-- same time.
+--
+-- root_dir rather than "the first jdtls": one Neovim session routinely holds
+-- several, one per multi-module project, and reindexing the wrong project is
+-- both useless and a multi-second Gradle round trip.
+local function jdtls_for(path)
+  local best
+  for _, c in ipairs(vim.lsp.get_clients({ name = "jdtls" })) do
+    local root = c.config and c.config.root_dir
+    -- Component boundary, not a bare string prefix. `path:sub(1, #root) == root`
+    -- says /p/app is an ancestor of /p/app-legacy/build.gradle, so saving a
+    -- build file in a sibling directory that merely *starts* with another
+    -- project's name reindexed that other project — a multi-second Gradle round
+    -- trip, a "refreshing…" toast, and no effect on the file just saved. Same
+    -- idiom as lua/config/project.lua:98 (written inline there too: that is the
+    -- only other place in the config that needs it, and requiring config.project
+    -- from autocmds.lua for one comparison would pull it into startup).
+    if root and (path == root or vim.startswith(path, root == "/" and "/" or root .. "/")) then
+      -- Longest match wins, so a nested module beats its aggregator.
+      if not best or #root > #(best.config.root_dir) then best = c end
+    end
+  end
+  return best
+end
 
 -- Java: reindex project when a new .java file is first saved
 local new_java_bufs = {}
@@ -249,13 +300,18 @@ autocmd("BufWritePost", {
     if not new_java_bufs[ev.buf] then return end
     new_java_bufs[ev.buf] = nil
     local bufname = vim.api.nvim_buf_get_name(ev.buf)
+    local buf = ev.buf
     vim.defer_fn(function()
-      local clients = vim.lsp.get_clients({ name = "jdtls" })
-      if #clients == 0 then return end
-      vim.lsp.buf.execute_command({
+      -- bufname is captured, not re-read from the current buffer: the one-second
+      -- delay is long enough to switch files, and the old code resolved the
+      -- target buffer at fire time, so reindexing silently applied to whatever
+      -- you had navigated to (or to nothing at all).
+      local client = jdtls_for(bufname)
+      if not client then return end
+      client:exec_cmd({
         command = "java.projectConfiguration.update",
         arguments = { vim.uri_from_fname(bufname) },
-      })
+      }, { bufnr = vim.api.nvim_buf_is_valid(buf) and buf or nil })
       vim.notify("Java: reindexing project for new file…", vim.log.levels.INFO)
     end, 1000)
   end,
@@ -265,14 +321,14 @@ autocmd("BufWritePost", {
 autocmd("BufWritePost", {
   group = augroup("gradle_refresh", { clear = true }),
   pattern = { "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "gradle.properties" },
-  callback = function()
-    local clients = vim.lsp.get_clients({ name = "jdtls" })
-    if #clients == 0 then return end
-    local uri = vim.uri_from_fname(vim.api.nvim_buf_get_name(0))
-    vim.lsp.buf.execute_command({
+  callback = function(ev)
+    local name = vim.api.nvim_buf_get_name(ev.buf)
+    local client = jdtls_for(name)
+    if not client then return end
+    client:exec_cmd({
       command = "java.projectConfiguration.update",
-      arguments = { uri },
-    })
+      arguments = { vim.uri_from_fname(name) },
+    }, { bufnr = ev.buf })
     vim.notify("Gradle: refreshing project dependencies…", vim.log.levels.INFO)
   end,
 })

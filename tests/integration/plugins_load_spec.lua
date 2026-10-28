@@ -274,8 +274,12 @@ describe("booted config", function()
       -- command cannot hide behind the skip.
       local ftplugin = vim.fn.fnamemodify(S.plugins_dir, ":h:h") .. "/ftplugin/java.lua"
       local text = H.read_text(ftplugin)
-      assert.is_not_nil(text:find('nvim_create_user_command("JdtlsClean"', 1, true),
-        "ftplugin/java.lua no longer defines JdtlsClean")
+      -- nvim_buf_create_user_command, not the global one: the ftplugin is
+      -- re-sourced per java buffer and its workspace_dir is a per-project
+      -- local, so a global command was rebound on every java buffer opened and
+      -- the surviving closure belonged to whichever project was sourced last.
+      assert.is_not_nil(text:find('nvim_buf_create_user_command(0, "JdtlsClean"', 1, true),
+        "ftplugin/java.lua no longer defines JdtlsClean buffer-locally")
 
       local jdtls_bin = vim.fn.stdpath("data") .. "/mason/bin/jdtls"
       if not vim.env.NVIM_IDE_TEST_SLOW then

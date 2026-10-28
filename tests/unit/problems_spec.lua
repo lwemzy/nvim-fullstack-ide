@@ -56,12 +56,28 @@ describe("config.problems", function()
 
     it("adds the modern tsc diagnostic shape ahead of the bundled definition", function()
       local efm = P.errorformat({ "tsc" })
-      local extra = efm:find([[%f:%l:%c\ -\ %trror\ TS%n:\ %m]], 1, true)
+      local extra = efm:find([[%f:%l:%c\ -\ %trror\ %m]], 1, true)
       local bundled = efm:find([[%f\ (%l\,%c):\ %trror\ TS%n:\ %m]], 1, true)
       assert.is_not_nil(extra, efm)
       -- Order is the whole point: these definitions end in a %-G catch-all, so
       -- an entry placed after one never runs.
       if bundled then assert.is_true(extra < bundled, efm) end
+    end)
+
+    it("puts the one-liners before the multiline esbuild entries", function()
+      -- Not cosmetic: `%C%.%#` (the last entry, and not removable — see below)
+      -- swallows ANY line while a multiline message is open. With the one-liners
+      -- after it, a tsc error printed anywhere downstream of an esbuild error was
+      -- absorbed as a continuation line and vanished from the list. Measured both
+      -- ways before fixing the order.
+      local efm = P.errorformat({ "tsc" })
+      local one_liner = efm:find([[%f:%l:%c\ -\ %trror\ %m]], 1, true)
+      local multiline = efm:find("%E\xe2\x9c\x98\\ [ERROR]\\ %m", 1, true)
+      local continuation = efm:find("%C%.%#", 1, true)
+      assert.is_not_nil(multiline, efm)
+      assert.is_not_nil(continuation, efm)
+      assert.is_true(one_liner < multiline, efm)
+      assert.is_true(multiline < continuation, efm)
     end)
 
     it("returns only the directory entry for a compiler that does not exist", function()
@@ -131,7 +147,155 @@ describe("config.problems", function()
       assert.equals(1, #items)
       assert.equals(4, items[1].lnum)
       assert.equals(9, items[1].col)
-      assert.equals(2322, items[1].nr)
+      -- Lower-cased: `%trror` captures the literal `e`, where the esbuild
+      -- entries' `%E` yields `E`. Vim renders both as "error" and M.publish
+      -- lower-cases before counting, so the difference is cosmetic — asserting
+      -- it case-insensitively is what keeps that true of the test too.
+      assert.equals("e", items[1].type:lower())
+      -- The code stays in the message rather than being captured with `TS%n`.
+      -- Capturing it required the literal "TS", which silently dropped every
+      -- Angular template diagnostic (NG8001) and i18n one (NG-…) — exactly the
+      -- errors an Angular build produces most. In the list it reads as part of
+      -- the text, which is where it is useful anyway.
+      assert.is_true(items[1].text:find("TS2322", 1, true) ~= nil, items[1].text)
+    end)
+
+    it("reads an Angular template diagnostic, whose code is not a TS number", function()
+      local items = P.parse({
+        "src/app/app.component.html:2:5 - error NG8001: 'app-foo' is not a known element.",
+      }, { compilers = { "tsc" } })
+
+      assert.equals(1, #items)
+      assert.equals(2, items[1].lnum)
+      assert.equals(5, items[1].col)
+      assert.is_true(items[1].text:find("NG8001", 1, true) ~= nil, items[1].text)
+    end)
+
+    it("strips the Error: prefix the Angular webpack builder adds", function()
+      -- An errorformat entry is NOT anchored to the start of the line, so with
+      -- only the bare form `%f` matched from column 1 and the prefix became part
+      -- of the filename: every item pointed at a path like
+      -- "<cwd>/Error: src/app/x.ts", a row that looks parsed and cannot be
+      -- jumped to. Proved by the differing bufnrs this asserts on.
+      local dir = H.tmpdir("ngbuild")
+      H.write(dir .. "/src/app/x.ts", { "const x: number = 'a';" })
+
+      local items = P.parse({
+        "Error: src/app/x.ts:1:7 - error TS2322: not assignable",
+      }, { compilers = { "tsc" }, dir = dir })
+
+      assert.equals(1, #items)
+      assert.equals(
+        vim.uv.fs_realpath(dir .. "/src/app/x.ts"),
+        vim.uv.fs_realpath(vim.api.nvim_buf_get_name(items[1].bufnr))
+      )
+      assert.equals(1, items[1].lnum)
+    end)
+
+    it("reads an esbuild diagnostic, whose location is on a later line", function()
+      -- Angular 17+ — the default builder for every new project since — splits
+      -- one diagnostic over a header, a blank line and an indented location
+      -- line, which no single-line pattern can express. Before this the whole
+      -- web half of the module looked broken: a failed `ng build` produced an
+      -- empty quickfix list.
+      local dir = H.tmpdir("esbuild")
+      H.write(dir .. "/src/app/app.component.ts", { "x", "y", "z" })
+
+      local items = P.parse({
+        "Application bundle generation failed. [2.253 seconds]",
+        "",
+        "\xe2\x9c\x98 [ERROR] TS2322: Type 'string' is not assignable to type 'number'. [plugin angular-compiler]",
+        "",
+        "    src/app/app.component.ts:2:2:",
+        "      2 \xe2\x94\x82   count: number = 'nope';",
+        "",
+      }, { compilers = { "tsc" }, dir = dir })
+
+      assert.equals(1, #items)
+      assert.equals(
+        vim.uv.fs_realpath(dir .. "/src/app/app.component.ts"),
+        vim.uv.fs_realpath(vim.api.nvim_buf_get_name(items[1].bufnr))
+      )
+      assert.equals(2, items[1].lnum)
+      assert.equals("E", items[1].type)
+      assert.is_true(items[1].text:find("not assignable", 1, true) ~= nil, items[1].text)
+    end)
+
+    it("separates two consecutive esbuild diagnostics", function()
+      local items = P.parse({
+        "\xe2\x9c\x98 [ERROR] TS2322: bad one [plugin angular-compiler]",
+        "",
+        "    src/a.ts:1:2:",
+        "      1 \xe2\x94\x82 x",
+        "",
+        "\xe2\x9c\x98 [ERROR] TS2554: bad two [plugin angular-compiler]",
+        "",
+        "    src/b.ts:3:4:",
+        "      3 \xe2\x94\x82 y",
+        "",
+      }, { compilers = { "tsc" } })
+
+      assert.equals(2, #items)
+      assert.equals(1, items[1].lnum)
+      assert.equals(3, items[2].lnum)
+      assert.is_true(items[1].text:find("bad one", 1, true) ~= nil, items[1].text)
+      assert.is_true(items[2].text:find("bad two", 1, true) ~= nil, items[2].text)
+    end)
+
+    it("marks an esbuild warning as a warning", function()
+      local items = P.parse({
+        "\xe2\x96\xb2 [WARNING] TS6385: 'foo' is deprecated. [plugin angular-compiler]",
+        "",
+        "    src/app/other.ts:4:9:",
+        "      4 \xe2\x94\x82   foo();",
+        "",
+      }, { compilers = { "tsc" } })
+
+      assert.equals(1, #items)
+      assert.equals(4, items[1].lnum)
+      assert.equals("W", items[1].type)
+    end)
+
+    it("keeps a location-less esbuild error as a message-only row", function()
+      -- `Could not resolve "./x"` has no location line at all. Deliberately kept
+      -- with no file and lnum 0: it is a real failure and the message is the
+      -- whole content, and one unjumpable row beats a build that fails with an
+      -- empty list.
+      local items = P.parse({
+        "\xe2\x9c\x98 [ERROR] Could not resolve \"./missing\" [plugin angular-compiler]",
+        "",
+      }, { compilers = { "tsc" } })
+
+      assert.equals(1, #items)
+      assert.equals(0, items[1].lnum)
+      assert.is_true(items[1].text:find("Could not resolve", 1, true) ~= nil, items[1].text)
+    end)
+
+    it("still finds a tsc one-liner printed after an esbuild diagnostic", function()
+      -- The regression the entry order exists for: `%C%.%#` absorbs any line
+      -- while a multiline message is open, so with the one-liners placed after
+      -- the %E/%W/%Z set this error was swallowed and only the esbuild one
+      -- survived.
+      local items = P.parse({
+        "\xe2\x9c\x98 [ERROR] TS2322: esbuild one [plugin angular-compiler]",
+        "",
+        "    src/a.ts:1:2:",
+        "      1 \xe2\x94\x82 x",
+        "",
+        "src/b.ts:7:3 - error TS2554: tsc one",
+      }, { compilers = { "tsc" } })
+
+      assert.equals(2, #items)
+      assert.equals(7, items[2].lnum)
+      assert.is_true(items[2].text:find("tsc one", 1, true) ~= nil, items[2].text)
+    end)
+
+    it("produces nothing for a clean esbuild build", function()
+      local items = P.parse({
+        "Application bundle generation complete. [1.2 seconds]",
+        "",
+      }, { compilers = { "tsc" } })
+      assert.same({}, items)
     end)
 
     it("resolves a relative path against the build directory, not nvim's cwd", function()

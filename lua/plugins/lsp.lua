@@ -184,6 +184,18 @@ return {
         return false
       end
 
+      --- Every mapping gate() has ever installed: { mode, lhs, method }.
+      ---
+      --- Populated by gate() itself rather than written out by hand, so the list
+      --- cannot drift out of sync with the ~15 gate() calls below — which is the
+      --- failure mode that matters, since a mapping missing from here is one that
+      --- never gets taken back. Keyed by mode..lhs so re-runs do not grow it.
+      ---
+      --- Read by the LspDetach handler further down. gate() only ever runs from
+      --- on_attach, i.e. while a client is *arriving*, so without that handler
+      --- nothing ever removes these.
+      local gated, gated_seen = {}, {}
+
       -- opts.rerun / opts.hints_registered are set by the capability
       -- registration wrappers below; see the comment there.
       local function on_attach(client, bufnr, opts)
@@ -216,6 +228,11 @@ return {
         --- mapping that was never set raises E31, which is the normal case on a
         --- first attach.
         local function gate(mode, lhs, rhs, method, desc)
+          local key = mode .. lhs
+          if not gated_seen[key] then
+            gated_seen[key] = true
+            gated[#gated + 1] = { mode = mode, lhs = lhs, method = method }
+          end
           if supports(method) then
             vim.keymap.set(mode, lhs, rhs, { buffer = bufnr, desc = desc })
           elseif not any_client_supports(bufnr, method) then
@@ -245,7 +262,22 @@ return {
           "textDocument/implementation", "Find implementations")
         gate("n", "<leader>lt", "<cmd>Telescope lsp_type_definitions<CR>",
           "textDocument/typeDefinition", "Type definition")
-        gate("n", "<C-k>", vim.lsp.buf.signature_help,
+        -- <leader>lk, not <C-k>. Normal-mode <C-k> is window-up
+        -- (lua/config/keymaps.lua:28, one of the <C-h/j/k/l> set), and a
+        -- buffer-local mapping always beats a global one — so installing this on
+        -- every buffer with a signatureHelp-capable server meant <C-k> moved the
+        -- cursor up a window in a scratch buffer, a terminal and the file tree,
+        -- and did nothing of the sort in any file you were actually editing,
+        -- while <C-h>, <C-j> and <C-l> kept working. An asymmetry inside one
+        -- four-key set is the kind of thing you blame on the terminal, not on a
+        -- keymap.
+        --
+        -- Same resolution the insert-mode half below already used for its own
+        -- collision — move the LSP key, keep the editor key — and <leader>l* is
+        -- where the rest of the non-vim-standard LSP verbs already live
+        -- (<leader>ls/lw/lo/lt/lc/lC), so which-key lists it under "lsp". NOT
+        -- <M-k>: normal <M-k> is move-line-up (keymaps.lua:318).
+        gate("n", "<leader>lk", vim.lsp.buf.signature_help,
           "textDocument/signatureHelp", "Signature help")
         -- Insert mode too, because signature help is most useful *while* you are
         -- typing arguments. nvim 0.11+ ships insert-mode <C-S> as the default for
@@ -665,11 +697,43 @@ return {
         end,
       })
 
+      local attach_augroup = vim.api.nvim_create_augroup("user_lsp_attach", { clear = true })
+
       vim.api.nvim_create_autocmd("LspAttach", {
-        group = vim.api.nvim_create_augroup("user_lsp_attach", { clear = true }),
+        group = attach_augroup,
         callback = function(ev)
           local client = vim.lsp.get_client_by_id(ev.data.client_id)
           if client then on_attach(client, ev.buf) end
+        end,
+      })
+
+      -- Take the capability-gated mappings back when their last supporting client
+      -- leaves.
+      --
+      -- gate()'s removal branch only runs while a client is attaching, so a
+      -- buffer that *lost* its server kept every one of them: gr, gi, gD,
+      -- <leader>rn, <leader>ca, <leader>ls, <leader>lw, <leader>lo, <leader>lt,
+      -- <leader>lc, <leader>lC, <S-F12>, <C-S-o>, <C-t>, <C-k> and insert <M-k>.
+      -- After :LspStop, a crash, or lsp_reap reclaiming an idle jdtls, all of
+      -- those answered "no client supports …" or opened an empty picker —
+      -- precisely the "present but dead" state the gate exists to prevent. <C-t>
+      -- is the worst of them: it stayed shadowed, so the built-in tag-stack pop
+      -- the comment at its gate() call promises as the fallback never came back.
+      --
+      -- `except = ev.data.client_id` is why any_client_supports takes that
+      -- argument at all (see its doc comment): the detaching client is still
+      -- listed by get_clients() while this event runs, so without it every method
+      -- would still look supported and nothing would ever be removed.
+      vim.api.nvim_create_autocmd("LspDetach", {
+        group = attach_augroup,
+        callback = function(ev)
+          for _, g in ipairs(gated) do
+            if not any_client_supports(ev.buf, g.method, ev.data.client_id) then
+              -- pcall: E31 for a mapping this buffer never had, which is the
+              -- normal case — gated holds every gate() call from every buffer.
+              pcall(vim.keymap.del, g.mode, g.lhs, { buffer = ev.buf })
+            end
+          end
         end,
       })
 

@@ -180,6 +180,96 @@ describe("runner", function()
     end)
   end)
 
+  describe("run_task", function()
+    -- The task picker (lua/config/tasks.lua) lists `bootRun` in every Gradle
+    -- build, `spring-boot:run` in every Maven one, and whatever scripts the
+    -- project's package.json declares — so what it offers includes the
+    -- long-lived application itself, not just builds. run_task used never to
+    -- register anything in `jobs`, which is right for `gradlew test` and wrong
+    -- for the one task that IS the application.
+
+    it("registers an app-starting task, so Stop and Restart can act on it", function()
+      -- Picking bootRun from the task list used to leave the toolbar showing
+      -- only Run: Stop said "not running" while the app was plainly serving on
+      -- 8080, and Run happily started a SECOND copy that died fighting for the
+      -- port — which reads as "Run is broken".
+      local target = fake_target("sleep 30", nil, "spring", "gradle")
+      assert.is_not_nil(runner.run_task(target, "/tmp/gradlew bootRun"))
+      assert.is_true(runner.is_running(target))
+
+      local notes = H.capture_notifications(function() runner.stop() end)
+      assert.is_false(runner.is_running(target))
+      assert.same({}, vim.tbl_filter(function(n)
+        return n.msg:find("not running", 1, true) ~= nil
+      end, notes))
+    end)
+
+    it("registers spring-boot:run and the node start scripts too", function()
+      for _, cmd in ipairs({
+        "/tmp/mvnw spring-boot:run",
+        "npm start",
+        "npm run dev",
+        "pnpm serve",
+        -- Gradle qualifies a task with its project path in a multi-module build…
+        "/tmp/gradlew :api:bootRun",
+        -- …while npm namespaces a script with a SUFFIX. The two conventions run
+        -- in opposite directions, so the task name is the last colon segment and
+        -- the script name is the first.
+        "npm run start:prod",
+        "npm run serve:ssr",
+      }) do
+        local target = fake_target("sleep 30", H.tmpdir("task-" .. cmd:gsub("%W", "")))
+        assert.is_not_nil(runner.run_task(target, cmd), cmd .. " did not start")
+        assert.is_true(runner.is_running(target), cmd .. " was not registered as a run")
+        runner.stop()
+      end
+    end)
+
+    it("does not register a build task, so Restart still means the app", function()
+      -- The other half, and the reason this is a predicate rather than "register
+      -- everything": `jobs` is what the toolbar's Stop/Restart act on. A
+      -- registered `gradlew test` would offer a Restart that restarts the test
+      -- instead of the application, and would make Run refuse to start the app
+      -- at all while the test ran.
+      local target = fake_target("sleep 30", nil, "spring", "gradle")
+      assert.is_not_nil(runner.run_task(target, "/tmp/gradlew test"))
+      assert.is_false(runner.is_running(target))
+    end)
+
+    it("does not mistake a task that merely contains a start word", function()
+      -- Frontier patterns, not substring matches: a `bootRunTests` task and an
+      -- `npm run dev-tools` script are builds, and registering either would take
+      -- the toolbar's Stop/Restart away from the real application.
+      local target = fake_target("sleep 30", nil, "spring", "gradle")
+      for _, cmd in ipairs({
+        "/tmp/gradlew bootRunTests",
+        "npm run dev-tools",
+        "npm run prestart",
+        "npm run serveless",
+      }) do
+        assert.is_not_nil(runner.run_task(target, cmd), cmd .. " did not start")
+        assert.is_false(runner.is_running(target), cmd .. " was treated as the app")
+      end
+    end)
+
+    it("focuses the running app instead of starting a second copy", function()
+      -- Same guard Run has, and it has to be the same one: picking bootRun from
+      -- the task list while bootRun is already running is the identical
+      -- port-collision, reached through a different key.
+      local target = fake_target("sleep 30", nil, "spring", "gradle")
+      runner.run_task(target, "/tmp/gradlew bootRun")
+      local first = current_job()
+
+      local notes = H.capture_notifications(function()
+        assert.is_nil(runner.run_task(target, "/tmp/gradlew bootRun"))
+      end)
+
+      assert.equals(first, current_job())
+      assert.equals(1, #new_terminals())
+      assert.is_true(notes[1].msg:find("already running", 1, true) ~= nil, notes[1].msg)
+    end)
+  end)
+
   describe("stop", function()
     it("kills the process and stops reporting it as running", function()
       local target = fake_target("sleep 30")

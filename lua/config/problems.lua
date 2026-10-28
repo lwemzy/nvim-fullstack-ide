@@ -17,8 +17,8 @@
 --   first use (javac.vim, maven.vim, tsc.vim), not written here. Maven's alone is
 --   1112 characters across POM parse errors, javac messages with and without
 --   columns, SpotBugs and JUnit failures — all upstream-maintained. The only
---   hand-written patterns in this file are the two in EXTRA_TSC, for a tsc output
---   shape the bundled file predates.
+--   hand-written patterns in this file are EXTRA_TSC, for the tsc and Angular
+--   output shapes the bundled file predates.
 --
 -- * The output is read from the terminal *buffer* on exit, not captured through
 --   `on_stdout`. The job is a pty, so on_stdout delivers ANSI colour, cursor
@@ -30,15 +30,64 @@
 
 local M = {}
 
---- tsc's newer one-line diagnostic, which $VIMRUNTIME/compiler/tsc.vim predates.
---- It ships `%f (%l,%c): %trror TS%n: %m` (the parenthesised form, still what
---- `tsc --pretty false` emits); Angular 17+ and plain `tsc --noEmit` print
---- `src/app/x.ts:14:25 - error TS2322: …` instead, which that pattern misses
---- entirely — so without these two the web targets would parse to an empty list
---- and look like a module that does not work.
+--- The tsc and Angular diagnostic shapes $VIMRUNTIME/compiler/tsc.vim predates.
+--- It ships `%f (%l,%c): %trror TS%n: %m` — the parenthesised form, still what a
+--- bare `tsc` emits — and nothing else, so all three shapes below parsed to an
+--- empty list and made the web targets look like a module that does not work.
+---
+--- ORDER IS LOAD-BEARING, in both directions. The one-liners come first because
+--- `%C%.%#` at the end swallows any line while a multiline message is open, so a
+--- tsc one-liner printed after an esbuild error was lost when it came later
+--- (measured: reordered, both are found; one-liners last, only the esbuild error
+--- survives). And `%C%.%#` itself cannot be dropped: the blank line esbuild puts
+--- between its header and its location line has to be consumed by something, and
+--- without it every esbuild item comes out with no file and lnum 0.
+---
+--- The three shapes:
+---
+---  1. `Error: src/app/x.ts:11:3 - error TS2322: …` — Angular's webpack builder
+---     (≤16, and `ng test`). The prefixed entries exist because an errorformat
+---     entry is not anchored to the start of the line: with only the bare `%f…`
+---     form, `%f` matched from column 1 and the prefix became part of the
+---     filename, so every item pointed at a path like
+---     "…/nvim/Error: src/app/x.ts" — a quickfix row that cannot be jumped to,
+---     from a parse that looked like it had worked.
+---  2. `src/app/x.ts:11:3 - error TS2322: …` — `tsc --noEmit`, and `ng build`
+---     before the esbuild switch.
+---  3. esbuild (Angular 17+, i.e. the default builder for every new project
+---     since), which splits one diagnostic over two lines:
+---
+---         ✘ [ERROR] TS2322: Type 'string' is not assignable … [plugin angular-compiler]
+---
+---             src/app/app.component.ts:11:2:
+---               11 │   count: number = 'nope';
+---
+---     Severity and message on the header, location on an indented line after a
+---     blank — which no single-line pattern can express, hence %E/%W + %Z.
+---
+--- The error code is left in %m rather than captured with `TS%n`, which is what
+--- the two original patterns did: Angular's template errors are `NG8001` and its
+--- i18n ones `NG-…`, so a `TS`-only pattern silently dropped exactly the
+--- diagnostics an Angular build produces most. In the list the code now reads as
+--- part of the message, which is where it is useful anyway.
+---
+--- An esbuild error with no location line at all (`Could not resolve "./x"`)
+--- comes through with no file and lnum 0. Kept deliberately: it is a real failure
+--- and the message is the whole content, and a message-only row in the list beats
+--- a build that fails with nothing in the list at all.
 local EXTRA_TSC = {
-  [[%f:%l:%c\ -\ %trror\ TS%n:\ %m]],
-  [[%f:%l:%c\ -\ %tarning\ TS%n:\ %m]],
+  [[Error:\ %f:%l:%c\ -\ %trror\ %m]],
+  [[Warning:\ %f:%l:%c\ -\ %tarning\ %m]],
+  [[%f:%l:%c\ -\ %trror\ %m]],
+  [[%f:%l:%c\ -\ %tarning\ %m]],
+  -- The glyphs are esbuild's own; it prints them unconditionally, including when
+  -- it is not writing to a TTY (which is how the output reaches this module).
+  "%E\xe2\x9c\x98\\ [ERROR]\\ %m",
+  "%W\xe2\x96\xb2\\ [WARNING]\\ %m",
+  -- Leading whitespace is skipped by errorformat, so the indented location line
+  -- needs no padding pattern. The trailing colon is esbuild's.
+  [[%Z%f:%l:%c:]],
+  [[%C%.%#]],
 }
 
 --- Resolves relative paths in the output against the directory the build ran in.

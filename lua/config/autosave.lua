@@ -9,6 +9,43 @@
 
 local M = {}
 
+---The on-disk identity of `name`, or nil if there is no file there.
+---
+---mtime seconds AND nanoseconds AND size, which is exactly what Neovim's own
+---`buf_write` compares (`!=` on each, not `>`). A one-sided second-resolution
+---check — what this used to be, `getftime(name) > known` — fails open in three
+---ways that all end in silent data loss:
+---
+---  * `getftime` returns -1 for a missing file, so `-1 > known` is false and a
+---    path that was deleted or renamed away gets RECREATED from the stale
+---    buffer. Renaming Old.java to New.java in a terminal split left both on
+---    disk, i.e. two classes of the same name and a build that stops compiling.
+---  * an external write landing in the same wall-clock second compares equal,
+---    so their content is clobbered.
+---  * mtime moving BACKWARDS is `<`, not `>`, and `tar -x`, `unzip`, `cp -p`,
+---    `rsync -a`, `git checkout` and `touch -r` all do that routinely.
+---@param name string
+---@return { sec: integer, nsec: integer, size: integer }?
+function M.stat(name)
+  if name == "" then return nil end
+  local st = vim.uv.fs_stat(name)
+  if not st then return nil end
+  return { sec = st.mtime.sec, nsec = st.mtime.nsec, size = st.size }
+end
+
+---Record the on-disk identity we last synced with, so `M.write` can tell
+---whether the file changed underneath us.
+---
+---Called from the auto_save_stamp augroup in lua/config/autocmds.lua on
+---BufReadPost and BufWritePost. It lives here, next to the only consumer of the
+---value, so the shape of `vim.b.autosave_mtime` is defined in one place.
+---@param buf integer
+function M.stamp(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then return end
+  local name = vim.api.nvim_buf_get_name(buf)
+  if name ~= "" then vim.b[buf].autosave_mtime = M.stat(name) end
+end
+
 ---Write `buf` if it is a modified, file-backed buffer and the file on disk has
 ---not moved under us since we last synced with it.
 ---
@@ -34,12 +71,32 @@ function M.write(buf)
   end
 
   local known = vim.b[buf].autosave_mtime
-  if known and vim.fn.getftime(name) > known then
-    vim.notify(
-      "auto-save skipped: " .. vim.fn.fnamemodify(name, ":t") .. " changed on disk (:w to overwrite)",
-      vim.log.levels.WARN
-    )
-    return false
+  -- type(), not a bare truthiness test: this used to hold a bare getftime()
+  -- number, and a buffer stamped before the config was reloaded (:source, a lazy
+  -- re-config, or simply a long-lived session across an upgrade) still carries
+  -- one. Indexing it raises inside a BufLeave callback, which aborts the write
+  -- and loses the edit — the exact outcome the guard exists to prevent. An
+  -- unrecognised stamp is treated as no stamp: M.stamp re-establishes it on the
+  -- next read or write.
+  if type(known) == "table" then
+    local now = M.stat(name)
+    local reason
+    if not now then
+      -- Deleted or renamed away while we held it modified. Writing here would
+      -- resurrect the old path, which for a Java class means two files
+      -- declaring the same type.
+      reason = "no longer on disk"
+    elseif now.sec ~= known.sec or now.nsec ~= known.nsec or now.size ~= known.size then
+      reason = "changed on disk"
+    end
+    if reason then
+      vim.notify(
+        ("auto-save skipped: %s %s (:w to overwrite)")
+          :format(vim.fn.fnamemodify(name, ":t"), reason),
+        vim.log.levels.WARN
+      )
+      return false
+    end
   end
 
   -- nvim_buf_call rather than a bare :write, because file_ops writes buffers

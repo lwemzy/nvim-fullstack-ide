@@ -8,9 +8,40 @@ if vim.fn.executable(mason_bin) == 0 then
 end
 
 -- Resolve the project root ONCE and derive everything from it.
+--
+-- find_root returns the NEAREST ancestor holding any marker — the list is a set,
+-- not a precedence order. That is why pom.xml / build.gradle / build.gradle.kts
+-- are deliberately NOT in the first pass: every module of a multi-module build
+-- has one, so a module's own build file beat the repository's .git and each
+-- module became its own "project". Opening files from three modules of one build
+-- started three jdtls JVMs (each committing -Xms1G immediately) and three
+-- Gradle/Maven imports. For Gradle it is worse than just wasteful: a subproject
+-- build.gradle imported standalone cannot resolve `project(':lib')`, so there is
+-- no classpath and zero completions in a project that builds fine on the command
+-- line.
+--
+-- These three markers only ever exist at a build ROOT: `mvnw`/`gradlew` are the
+-- wrapper scripts, and `settings.gradle` is what declares a Gradle
+-- multi-project build in the first place. Same set nvim-jdtls itself defaults to
+-- ({ ".git", "gradlew", "mvnw" }), plus settings.gradle. The rule matches the one
+-- lua/config/project.lua:69-72 states for this repo: "The VCS root rather than
+-- the nearest package.json / pom.xml: in a monorepo or a multi-module Maven
+-- build those stop at the package".
 local root_dir = require("jdtls.setup").find_root({
-  ".git", "mvnw", "gradlew", "pom.xml", "build.gradle", "build.gradle.kts",
-}) or vim.fn.getcwd()
+  ".git", "mvnw", "gradlew", "settings.gradle", "settings.gradle.kts",
+})
+  -- Second pass, and only if the first found nothing: a single-module project
+  -- with no wrapper, no settings.gradle and no VCS directory of its own. Here
+  -- the module file IS the root, so the old behaviour is the right one.
+  or require("jdtls.setup").find_root({ "pom.xml", "build.gradle", "build.gradle.kts" })
+  -- The buffer's own directory, not getcwd(). getcwd() is wherever nvim happened
+  -- to be started — frequently $HOME — and handing jdtls $HOME as a project root
+  -- makes it index the entire home directory. getcwd() survives only for a
+  -- buffer with no name at all, which cannot be a .java file on disk.
+  or (function()
+    local name = vim.api.nvim_buf_get_name(0)
+    return name ~= "" and vim.fs.dirname(name) or vim.fn.getcwd()
+  end)()
 
 -- Per-project workspace to avoid cross-project class collisions.
 -- Must key off root_dir, NOT getcwd(): root_dir is derived from the buffer's
@@ -117,6 +148,28 @@ local heap_mb = (function()
   return math.max(512, math.min(4096, math.floor(total / 6 / 1024 / 1024)))
 end)()
 
+-- The mason launcher hardcodes `-Xms1G` into exec_args BEFORE appending our
+-- --jvm-arg values (mason/packages/jdtls/bin/jdtls.py:126-130), so on any
+-- machine where heap_mb lands under 1024 the JVM was handed -Xms1G together with
+-- a smaller -Xmx and refused to start outright:
+--
+--   $ java -Xms1G -Xmx682m -version
+--   Error occurred during initialization of VM
+--   Initial heap size set to a larger value than the maximum heap size
+--
+-- heap_mb is 682 on a 4GB laptop and on a 64GB host inside a 4GB devcontainer,
+-- and 512 at 2GB — so jdtls attached and immediately exited, which is the
+-- "worst possible symptom" this file's header describes: Java completion
+-- silently absent with nothing in nvim to explain it.
+--
+-- Fixed by passing our own -Xms, which lands after the launcher's and therefore
+-- wins (verified: `-Xms1G -Xms256m -Xmx512m` reports InitialHeapSize=256MB via
+-- -XX:+PrintFlagsFinal). Raising the floor to 1024 instead would also have
+-- started, but it would force a 1G commit on exactly the small machines the
+-- sizing above exists to protect. A quarter of the heap, bounded below by 128MB
+-- so a big machine still starts warm.
+local initial_heap_mb = math.max(128, math.floor(heap_mb / 4))
+
 -- Workspace dir must exist before jdtls starts; otherwise LaunchingPlugin can't save install info
 vim.fn.mkdir(workspace_dir, "p")
 
@@ -124,6 +177,9 @@ local config = {
   cmd = (function()
     local c = {
       mason_bin,
+      -- -Xms before -Xmx only for readability; both land after the launcher's
+      -- own -Xms1G, which is what makes the override work.
+      "--jvm-arg=-Xms" .. initial_heap_mb .. "m",
       "--jvm-arg=-Xmx" .. heap_mb .. "m",
       "--jvm-arg=-XX:+UseG1GC",
       "--jvm-arg=-XX:GCTimeRatio=4",
@@ -268,7 +324,7 @@ local config = {
       vim.keymap.set("n", keys, func, { buffer = bufnr, desc = desc })
     end
 
-    -- The standard LSP keymaps (gd/gD/gr/gi/K/<C-k>/<leader>rn/<leader>ca/
+    -- The standard LSP keymaps (gd/gD/gr/gi/K/<leader>lk/<leader>rn/<leader>ca/
     -- [d/]d/<leader>d/<leader>lt/<leader>ls/<leader>lw/<leader>lc/<leader>lC and
     -- inlay hints) now come from the shared LspAttach handler in
     -- lua/plugins/lsp.lua, which fires for jdtls too. They used to be
@@ -470,13 +526,20 @@ local config = {
     bundles = (function()
       local bundles = {}
       -- java-debug-adapter (enables DAP debugging)
-      local debug_jar = vim.fn.glob(
+      --
+      -- glob(pat, true, true) and not glob(pat, true): the two-argument form
+      -- returns a newline-JOINED STRING, so when a mason upgrade leaves two
+      -- plugin-*.jar versions side by side this pushed a single
+      -- "…/plugin-0.53.1.jar\n…/plugin-0.54.0.jar" into bundles. That entry is
+      -- not a readable file, and per the note below one bad entry makes jdtls's
+      -- loadBundles throw and abort the WHOLE list — so F5, <leader>dR,
+      -- <F10>/<F11> and the Run toolbar all go dead at once, silently. The
+      -- java-test glob below already passed both flags; this one did not.
+      local debug_jars = vim.fn.glob(
         vim.fn.stdpath("data") .. "/mason/packages/java-debug-adapter/extension/server/com.microsoft.java.debug.plugin-*.jar",
-        true
+        true, true
       )
-      if debug_jar ~= "" then
-        vim.list_extend(bundles, { debug_jar })
-      end
+      vim.list_extend(bundles, debug_jars)
       -- java-test (enables running tests via jdtls)
       -- Excludes runner-jar-with-dependencies.jar and jacocoagent.jar: these are
       -- plain runtime jars for the test JVM's classpath, not OSGi bundles, and
@@ -498,7 +561,18 @@ local config = {
       if sb_ok then
         vim.list_extend(bundles, spring_boot.java_extensions())
       end
-      return bundles
+      -- Last line of defence over every source above, including
+      -- spring_boot.java_extensions(), which this config does not control. One
+      -- unreadable entry aborts loadBundles entirely and takes debugging and
+      -- test-running down with it, so dropping the bad entry and saying which
+      -- one beats losing the list. Nothing above checks readability — the
+      -- test-jar filter next to it matches on NAME, to exclude jars that exist
+      -- but are not OSGi bundles, which is a different problem.
+      return vim.tbl_filter(function(jar)
+        if vim.fn.filereadable(jar) == 1 then return true end
+        vim.notify("jdtls: skipping unreadable bundle " .. jar, vim.log.levels.WARN)
+        return false
+      end, bundles)
     end)(),
   },
 }
@@ -539,14 +613,36 @@ pcall(jdtls.setup_dap, { hotcodereplace = "auto", config_overrides = { console =
 jdtls.start_or_attach(config)
 
 -- Clean workspace and restart jdtls (use when Lombok/deps go stale)
-vim.api.nvim_create_user_command("JdtlsClean", function()
+--
+-- Buffer-local, like the <leader>jc mapping below. This file is re-sourced per
+-- java buffer, and `workspace_dir` is a per-project local — so a GLOBAL command
+-- was silently rebound on every java buffer opened, and the one surviving
+-- closure belonged to whichever project was sourced LAST. With two projects
+-- open, :JdtlsClean from project A deleted project B's workspace and left A's
+-- stale one exactly as it was: the command reported success and fixed nothing,
+-- while B then had to re-import from scratch.
+vim.api.nvim_buf_create_user_command(0, "JdtlsClean", function()
   local function wipe_and_restart()
     vim.fn.delete(workspace_dir, "rf")
     vim.notify("jdtls: workspace cleared — restarting…", vim.log.levels.INFO)
-    vim.schedule(function() vim.cmd("edit") end)
+    -- doautocmd FileType, not `edit`. Both re-source this ftplugin (that is the
+    -- only thing the reload was ever for — see the on_attach comment above), but
+    -- a bare `:edit` aborts with E37 "No write since last change" on a modified
+    -- buffer, which is the common case: you reach for :JdtlsClean precisely when
+    -- completion has gone dead mid-edit. The workspace was already deleted by
+    -- then, so the failure left no server, no workspace and no restart. Verified:
+    -- `pcall(vim.cmd, "edit")` on a modified buffer → false, E37; doautocmd
+    -- re-sources the ftplugin and leaves the unsaved lines untouched.
+    vim.schedule(function() vim.cmd("doautocmd FileType") end)
   end
 
-  local clients = vim.lsp.get_clients({ name = "jdtls" })
+  -- This project's clients only. Unfiltered get_clients({ name = "jdtls" })
+  -- force-stopped every Java project in the session, so cleaning one project
+  -- cost a full re-import of all the others — and since only the current buffer
+  -- is re-sourced above, those others stayed server-less until you touched them.
+  local clients = vim.tbl_filter(function(c)
+    return c.config and c.config.root_dir == root_dir
+  end, vim.lsp.get_clients({ name = "jdtls" }))
   if #clients == 0 then
     wipe_and_restart()
     return

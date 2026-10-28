@@ -198,6 +198,35 @@ describe("config.lsp_reap", function()
     end)
   end)
 
+  describe("how it stops a server", function()
+    it("gives the server a deadline to shut down, rather than only asking", function()
+      -- The whole leak survived this call. Client:stop() with no argument
+      -- defaults to `exit_timeout`, which defaults to `false` — and `false`
+      -- takes neither the `force == true` branch nor the numeric one, so all
+      -- that is ever sent is a `shutdown` request. A jdtls wedged on a Gradle
+      -- import does not answer it, the JVM stays resident with its whole heap,
+      -- and because `_is_stopping` makes is_stopped() true immediately the
+      -- guard in sweep() then hides it from every later pass. Permanently, and
+      -- with nothing on screen.
+      local srv, buf = server("jdtls")
+      wipe(buf)
+      local client = assert(vim.lsp.get_client_by_id(srv.id))
+      local stopped = H.spy(client, "stop")
+
+      reap.sweep(0)
+      assert.same({ "jdtls" }, reap.sweep(TIMEOUT))
+
+      assert.equals(1, stopped.count)
+      -- A number, not `true` and not nil: nvim's own doc on stop() warns that
+      -- force-killing a server mid-write "can lead to file corruption", and
+      -- jdtls flushes its index and project metadata to the -data workspace on
+      -- shutdown. The number is the grace period before the kill.
+      assert.equals("number", type(stopped[1][2]))
+      assert.equals(reap.exit_timeout_ms, stopped[1][2])
+      assert.is_true(reap.exit_timeout_ms > 0)
+    end)
+  end)
+
   describe("bookkeeping", function()
     it("forgets a client that went away on its own", function()
       -- A crash or :LspRestart retires the client without us stopping it. Its id
