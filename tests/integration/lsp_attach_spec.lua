@@ -55,6 +55,10 @@ local UNCONDITIONAL = {
 local GATED = {
   { lhs = "gD", mode = "n", cap = "declarationProvider" },
   { lhs = "gr", mode = "n", cap = "referencesProvider" },
+  -- VS Code's Shift+F12 for the same picker. It goes through gate() like the
+  -- rest, so it belongs here: left out, nothing checked that it appears with a
+  -- capable server, disappears without one, or is taken back on detach.
+  { lhs = "<S-F12>", mode = "n", cap = "referencesProvider" },
   { lhs = "gi", mode = "n", cap = "implementationProvider" },
   { lhs = "<leader>lt", mode = "n", cap = "typeDefinitionProvider" },
   -- <leader>lk, NOT normal-mode <C-k>: that is window-up, one of the
@@ -71,6 +75,14 @@ local GATED = {
   { lhs = "<leader>ca", mode = "n", cap = "codeActionProvider" },
   { lhs = "<leader>ls", mode = "n", cap = "documentSymbolProvider" },
   { lhs = "<leader>lw", mode = "n", cap = "workspaceSymbolProvider" },
+  -- The VS Code chords for those two pickers, plus the outline sidebar. All
+  -- three are gate() calls and none of them was listed, which mattered most for
+  -- <C-t>: it shadows Neovim's built-in pop-tag-stack, so a copy left behind
+  -- after the server went away is not a dead key but a key that took a working
+  -- builtin with it.
+  { lhs = "<C-S-o>", mode = "n", cap = "documentSymbolProvider" },
+  { lhs = "<C-t>", mode = "n", cap = "workspaceSymbolProvider" },
+  { lhs = "<leader>lo", mode = "n", cap = "documentSymbolProvider" },
   { lhs = "<leader>uh", mode = "n", cap = "inlayHintProvider" },
   { lhs = "<leader>lc", mode = "n", cap = "callHierarchyProvider" },
   { lhs = "<leader>lC", mode = "n", cap = "callHierarchyProvider" },
@@ -453,9 +465,10 @@ describe("lsp on_attach", function()
       assert.is_nil(buf_map(m.mode, m.lhs, bufnr),
         ("%s (%s) should be gone after the last client left"):format(m.lhs, m.mode))
     end
-    -- Also gone: <C-t>, which on_attach shadows to pop the Telescope-driven
-    -- definition stack. It is not in GATED because it is not gated on a
-    -- capability, but leaving it behind permanently breaks the builtin.
+    -- <C-t> is in GATED above and therefore already covered by the loop. Kept
+    -- as a named assertion anyway: it is the one mapping here whose survival
+    -- does not merely leave a dead key but removes a *working* builtin
+    -- (pop-tag-stack), so it is worth failing by name rather than by index.
     assert.is_nil(buf_map("n", "<C-t>", bufnr))
   end)
 
