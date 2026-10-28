@@ -83,6 +83,13 @@ local GATED = {
   { lhs = "<C-S-o>", mode = "n", cap = "documentSymbolProvider" },
   { lhs = "<C-t>", mode = "n", cap = "workspaceSymbolProvider" },
   { lhs = "<leader>lo", mode = "n", cap = "documentSymbolProvider" },
+  -- mac-config only: the Cmd twin of <C-S-o>. It is deliberately a gate() call
+  -- rather than a plain alias beside one (see lua/plugins/lsp.lua), and listing
+  -- it here is what holds that promise to the same standard as its twin — it
+  -- has to appear, stay absent, and be taken back on detach identically.
+  -- Without this line the Cmd key was the only gated mapping in the config with
+  -- no test at all, on the branch that exists to add Cmd keys.
+  { lhs = "<D-S-o>", mode = "n", cap = "documentSymbolProvider" },
   { lhs = "<leader>uh", mode = "n", cap = "inlayHintProvider" },
   { lhs = "<leader>lc", mode = "n", cap = "callHierarchyProvider" },
   { lhs = "<leader>lC", mode = "n", cap = "callHierarchyProvider" },

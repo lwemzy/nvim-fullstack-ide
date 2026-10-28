@@ -720,8 +720,10 @@ return {
       -- gate()'s removal branch only runs while a client is attaching, so a
       -- buffer that *lost* its server kept every one of them: gr, gi, gD,
       -- <leader>rn, <leader>ca, <leader>ls, <leader>lw, <leader>lo, <leader>lt,
-      -- <leader>lc, <leader>lC, <leader>lk, <S-F12>, <C-S-o>, <C-t> and insert
-      -- <M-k>.
+      -- <leader>lc, <leader>lC, <leader>lk, <S-F12>, <C-S-o>, <C-t>, insert
+      -- <M-k> — and on this branch <D-S-o>, which is a gate() call for exactly
+      -- this reason: a Cmd alias written as a second vim.keymap.set beside its
+      -- twin would be invisible to this handler and outlive the capability.
       -- After :LspStop, a crash, or lsp_reap reclaiming an idle jdtls, all of
       -- those answered "no client supports …" or opened an empty picker —
       -- precisely the "present but dead" state the gate exists to prevent. <C-t>
