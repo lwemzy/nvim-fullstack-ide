@@ -18,6 +18,17 @@ local MASON_JDTLS = vim.fn.stdpath("data") .. "/mason/bin/jdtls"
 
 describe("ftplugin/java.lua", function()
   local jdtls, captured, notifications
+  -- One permanent no-op, installed on first use and never restored, under the
+  -- per-test H.spy below (H.spy saves whatever it finds, so it restores *this*).
+  --
+  -- The per-test spy alone is not enough to hold the promise in the header, and
+  -- the gap is JdtlsClean: it defers its restart until every client detaches,
+  -- with an 8s fail-safe, and the two tests that leave a client attached on
+  -- purpose finish long before that timer. The restart then re-sources the
+  -- ftplugin for real, after after_each has already restored the spy — measured
+  -- 2 live Eclipse JDT LS JVMs (~800MB) per run, each surviving until this
+  -- file's nvim exits, from a spec that starts no server at all.
+  local launch_blocked = false
 
   --- A minimal Java project: a root marker and one source file. Deliberately
   --- NOT the spring-gradle fixture — a Spring build file makes plugins/java.lua
@@ -56,6 +67,10 @@ describe("ftplugin/java.lua", function()
     H.disable_autosave()
 
     jdtls = require("jdtls")
+    if not launch_blocked then
+      launch_blocked = true
+      jdtls.start_or_attach = function() end
+    end
     captured = nil
     -- Intercept the launch. Without this the spec would start a real Eclipse
     -- JDT LS per project, each with its own workspace and multi-second import.

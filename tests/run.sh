@@ -74,10 +74,36 @@ run_limited() {
   wait "$pid"; local rc=$?
   kill -TERM "$watchdog" >/dev/null 2>&1
   kill -s TERM -- "-$pid" >/dev/null 2>&1
+  reap_lsp_jvms "$pid"
   return "$rc"
 }
 
 trap 'rm -f "$TIMEOUT_MARKER"' EXIT
+
+# Kill the language-server JVMs started by the nvim with pid $1.
+#
+# The process-group kill above provably cannot reach them. Neovim spawns an LSP
+# server detached: every jdtls and vscode-spring-boot-tools process measured
+# here had ppid=1, pgid equal to its own pid and sess=0 from the moment it
+# appeared, so it was never in the group being signalled. Nothing survived a
+# clean run only because jdtls and the Spring server exit when their stdio pipes
+# close — a property of those two servers, not a guarantee of this harness. An
+# interrupted or timed-out run has no such luck, and the leak is ~400MB a piece
+# (measured peak: 15 JVMs, 5.9GB).
+#
+# Matched on the pid-stamped test paths (H.tmpdir and the jdtls workspace
+# derived from it both start with the owning nvim's pid) rather than on "java",
+# so this cannot touch a real editing session's servers — or another spec file's,
+# since each gets its own nvim.
+reap_lsp_jvms() {
+  local owner="$1" jvm
+  for jvm in $(ps -eo pid,args 2>/dev/null | awk \
+    -v a="jdtls-workspaces/$owner-" -v b="nvim-ide-tests/$owner-" \
+    'index($0, a) || index($0, b) { print $1 }'); do
+    [ "$jvm" = "$owner" ] && continue
+    kill -TERM "$jvm" >/dev/null 2>&1
+  done
+}
 
 collect() {
   local dir="$1"

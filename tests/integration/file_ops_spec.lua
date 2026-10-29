@@ -36,7 +36,17 @@ describe("config.file_ops", function()
   --- renamed one.
   local function hidden(path)
     local buf = vim.fn.bufadd(path)
+    -- FileType suppressed, the same trick H.quiet_buffer uses (it is not used
+    -- directly here because it makes the buffer current, and "never entered" is
+    -- the whole point of this helper). bufload runs filetype detection, so on a
+    -- .java path it sourced the real ftplugin/java.lua and started a real
+    -- Eclipse JDT LS — measured: 6 jdtls JVMs, ~2.4GB, one per case in a spec
+    -- whose server is deliberately fake, all of them outliving their test
+    -- because nothing here stops them.
+    local saved = vim.o.eventignore
+    vim.o.eventignore = "FileType"
     vim.fn.bufload(buf) -- fires BufReadPost, so auto_save_stamp stamps it
+    vim.o.eventignore = saved
     H.track_buf(buf)
     return buf
   end

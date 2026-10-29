@@ -447,10 +447,51 @@ function H.cleanup()
   end
   tracked.bufs = {}
 
+  -- Every java buffer the suite opens leaves a jdtls workspace behind even when
+  -- the launch is stubbed: ftplugin/java.lua mkdir -p's it *before*
+  -- start_or_attach, because the launcher cannot save its install info into a
+  -- directory that does not exist. Deleting the tmpdir below does not remove the
+  -- workspace it produced, and nothing else ever does — measured 3,935
+  -- abandoned directories, 89MB, growing by ~46 per suite run.
+  --
+  -- Two rules, because one does not cover the other:
+  --  * the workspace name starts with this nvim's pid, which is true whenever
+  --    the project root is an H.tmpdir itself (its basename carries the pid);
+  --  * or it ends with -<sha256(root):8> for a root under one of those tmpdirs,
+  --    which is what catches a fixture rooted in a *subdirectory* (a spring
+  --    `demo` inside the tmpdir names its workspace demo-<sha>, with no pid).
+  -- Both are scoped to paths this process created, so a concurrently running
+  -- spec file (a different pid) and a real project's workspace are untouchable.
+  local suffixes = {}
+  --- Both the path as the spec wrote it and its symlink-resolved form: on macOS
+  --- a tmpdir lives under /var/folders, which IS a symlink to /private/var, and
+  --- root detection hands jdtls whichever one it was given — so hashing only the
+  --- literal path misses half the workspaces on this platform.
+  local function remember(path)
+    suffixes["-" .. vim.fn.sha256(path):sub(1, 8)] = true
+    local real = vim.uv.fs_realpath(path)
+    if real and real ~= path then
+      suffixes["-" .. vim.fn.sha256(real):sub(1, 8)] = true
+    end
+  end
   for _, dir in ipairs(tracked.dirs) do
-    if dir:find("nvim%-ide%-tests") then pcall(vim.fn.delete, dir, "rf") end
+    if dir:find("nvim%-ide%-tests") then
+      remember(dir)
+      for sub, kind in vim.fs.dir(dir, { depth = 3 }) do
+        if kind == "directory" then remember(dir .. "/" .. sub) end
+      end
+      pcall(vim.fn.delete, dir, "rf")
+    end
   end
   tracked.dirs = {}
+
+  local mine = ("%d-"):format(vim.uv.os_getpid())
+  local workspaces = vim.fn.stdpath("data") .. "/jdtls-workspaces"
+  for name, kind in vim.fs.dir(workspaces) do
+    if kind == "directory" and (name:sub(1, #mine) == mine or suffixes[name:sub(-9)]) then
+      pcall(vim.fn.delete, workspaces .. "/" .. name, "rf")
+    end
+  end
 end
 
 return H

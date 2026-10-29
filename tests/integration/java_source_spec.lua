@@ -49,7 +49,12 @@ describe("config.java_source accessors", function()
       "  private int quantity;",
       "}",
     })
-    return H.edit(path)
+    -- quiet_buffer, not H.edit: nothing here needs the FileType event, and with
+    -- it the real ftplugin/java.lua started a real Eclipse JDT LS per case —
+    -- measured 5 live jdtls JVMs (~2GB) from this file alone, in a spec whose
+    -- server is a fake. The filetype is set explicitly because config.java_source
+    -- reads vim.bo.filetype.
+    return H.quiet_buffer(path, "java")
   end
 
   --- The two fields jdtls would answer java/resolveUnimplementedAccessors with.
