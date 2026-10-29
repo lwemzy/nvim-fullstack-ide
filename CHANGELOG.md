@@ -7,6 +7,8 @@ same commit.
 
 ## 2026-10-28
 
+- **Update 4 pinned plugins: neogit, nvim-lspconfig, nvim-tree.lua, schemastore.nvim** (`1df444d`)
+  - `lazy-lock.json` pins bumped to each plugin's current commit. `make lint` and `make test-unit` pass on the updated set.
 - **Fix 18 bugs found by a full-codebase code review**
   - Fifteen came out of the review; the last three were found while writing the
     regression tests for the first fifteen, which is the argument for writing
