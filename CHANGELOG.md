@@ -7,6 +7,41 @@ same commit.
 
 ## 2026-11-15
 
+- **Rewire spring-boot.nvim onto its native-LSP API again, pin jdtls's Gradle import to the project's own wrapper version, and stop leaked spring-boot JVMs on `:JdtlsClean`** (`e86d95a`)
+  - spring-boot.nvim (as of upstream `9880be4`) migrated fully onto native
+    `vim.lsp.config`/`vim.lsp.enable` and dropped the pre-native
+    `launch.update_ls_config`/`start`/`ls_autocmd` API this config's own
+    `spring_boot_ls_gated` FileType autocmd used to drive by hand. `setup()`
+    now enables the server itself; the java-only Spring Boot gate moves onto a
+    `server.root_dir` wrapper, same idiom already used for angularls — safe
+    this time because the resolved root reaches `on_dir` as a plain string,
+    not through `launch.update_ls_config`'s root-substitution path that broke
+    this exact wrapper idiom back on 2026-10-09.
+  - jdtls refused Gradle imports that use the project's own
+    `gradle-wrapper.jar` ("could be malicious") with no way to answer the
+    prompt from Neovim, so this config forced a fixed local Gradle install —
+    which silently downgraded any project pinned to a newer version (this is
+    what broke Lombok: a project pinned to Gradle 9.8.2 got sdkman's 8.13,
+    which can't resolve a dependency set built against 9.x). Now reads the
+    version straight out of the project's own `gradle-wrapper.properties`
+    (never executes it) and hands Buildship `java.import.gradle.version`, so
+    it fetches/uses the exact pinned Gradle through its own Tooling API.
+    Falls back to a fixed local install (and the wrapper's trust prompt) only
+    when no `gradle-wrapper.properties` exists at all.
+  - `:JdtlsClean` only ever force-stopped the `jdtls` client for a project's
+    `root_dir`. A long session turned up two live `vscode-spring-boot-tools`
+    JVMs for one project after repeated `:JdtlsClean` cycles — its own
+    `root_dir()` always resolves the same root, so the duplicate came from
+    nvim believing the earlier client was gone (no client left to reuse) while
+    its JVM process never actually exited. `:JdtlsClean` now force-stops any
+    `spring-boot` client at that root too, same as it already does for jdtls.
+  - `tests/integration/project_gating_spec.lua` rewritten against the new
+    `vim.lsp.config["spring-boot"].root_dir` seam (previously: the now-gone
+    FileType autocmd with `vim.lsp.start` stubbed). Dropped the
+    JSON-serialisability regression test this rewrite made moot — the new
+    seam never passes anything through `init_options.workspaceFolders` to
+    begin with, so that failure mode can't recur the way it did on 2026-10-09.
+
 - **Add diffbandit.nvim merge-conflict resolver, and a Spring javaformat-aware Java formatter** (`9528c9f`)
   - diffbandit.nvim fills a real gap in the git stack (gitsigns/diffview/neogit):
     none of them wire up a merge-conflict UI, so there was no `git mergetool`

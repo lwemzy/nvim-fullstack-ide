@@ -2,17 +2,20 @@
 --
 --   angularls        lua/plugins/lsp.lua   — root_dir returns without calling
 --                                            on_dir outside an Angular project
---   spring-boot.nvim lua/plugins/java.lua  — a FileType autocmd that only
---                                            starts boot-ls for .java when the
---                                            build files declare Spring Boot
+--   spring-boot.nvim lua/plugins/java.lua  — a server.root_dir wrapper that
+--                                            only short-circuits .java when the
+--                                            build files don't declare Spring
+--                                            Boot, delegating everything else
+--                                            (including the yaml/jproperties
+--                                            filename check) to the plugin's
+--                                            own root_dir
 --
 -- Both are negative properties: the thing that must be observed is a server
 -- NOT starting. So both are driven through the exact seam the framework uses
--- (root_dir's on_dir callback, the gate autocmd's own callback) with the launch
--- path stubbed, rather than by starting servers and looking at what attached.
--- Starting the real angularls/boot-ls would take tens of seconds, depend on
--- mason state, and — for the negative cases — could only ever prove "nothing
--- attached *yet*".
+-- (root_dir's on_dir callback) rather than by starting servers and looking at
+-- what attached. Starting the real angularls/boot-ls would take tens of
+-- seconds, depend on mason state, and — for the negative cases — could only
+-- ever prove "nothing attached *yet*".
 
 local H = require("helpers")
 
@@ -112,19 +115,16 @@ end)
 describe("spring-boot.nvim project gating", function()
   -- Unlike angularls (built into nvim-lspconfig, configured once at startup),
   -- spring-boot.nvim is lazy-loaded on ft = {java, yaml, jproperties}, and its
-  -- own config() function is what calls spring_boot.setup(). The gate is then a
-  -- FileType autocmd lua/plugins/java.lua registers itself (group
-  -- spring_boot_ls_gated), because this plugin predates native vim.lsp.config:
-  -- as of 98c6ff1 it still drives everything through spring_boot.launch's
-  -- update_ls_config/start and never populates vim.lsp.config["spring-boot"].
-  --
-  -- That matters for this spec specifically. It used to drive
-  -- vim.lsp.config["spring-boot"].root_dir, which is always nil here, so
-  -- before_each set skip_reason and all nine assertions below skipped on every
-  -- machine, every run — which is how the regression the last test in this file
-  -- now pins got committed green. The seam is the gate autocmd's own callback,
-  -- with vim.lsp.start stubbed, exactly as this file's header describes.
-  local gate
+  -- own config() function is what calls spring_boot.setup(). As of 9880be4
+  -- upstream migrated to native vim.lsp.config/vim.lsp.enable and dropped the
+  -- pre-native API (launch.update_ls_config/start/ls_autocmd) this file used
+  -- to drive by hand through its own FileType autocmd (group
+  -- spring_boot_ls_gated, now gone). The gate is now the `server.root_dir`
+  -- wrapper lua/plugins/java.lua hands to setup(), which
+  -- vim.lsp.config["spring-boot"].root_dir resolves to — same seam as the
+  -- angularls block above: call root_dir(bufnr, on_dir) directly, no stub
+  -- needed, since nothing here goes through vim.lsp.start.
+  local root_dir
 
   local skip_reason
 
@@ -147,21 +147,24 @@ describe("spring-boot.nvim project gating", function()
     -- installed all along.
     H.load_plugin("mason.nvim", "spring-boot.nvim")
 
-    -- setup() bails (with its own warning) when the jar really is missing, and
-    -- lua/plugins/java.lua returns without registering the gate in that case.
-    local aus = H.autocmds({ event = "FileType", group = "spring_boot_ls_gated" })
-    gate = aus[1] and aus[1].callback
-    if not gate then
+    -- setup() bails (with its own warning, before registering anything in
+    -- vim.lsp.config) when the jar really is missing. Checking config.ls_path
+    -- directly is unambiguous either way — unlike vim.lsp.config["spring-boot"],
+    -- which can resolve to the plugin's own *unwrapped* base root_dir purely
+    -- from `lsp/spring-boot.lua` being on the runtimepath, even when setup()
+    -- (and so our own server.root_dir override) never ran at all.
+    if not require("spring_boot.config").ls_path then
       skip_reason = "vscode-spring-boot-tools not installed — spring_boot.setup() bailed"
     else
       skip_reason = nil
+      root_dir = vim.lsp.config["spring-boot"].root_dir
     end
   end)
 
   after_each(function() H.cleanup() end)
 
   --- H.quiet_buffer sets the filetype without firing FileType, which is what
-  --- keeps ftplugin/java.lua and the real jdtls out of this spec. The gate is
+  --- keeps ftplugin/java.lua and the real jdtls out of this spec. root_dir is
   --- invoked by hand below, so suppressing the event costs nothing.
   local function quiet_buffer(path, ft)
     local buf = H.quiet_buffer(path, ft)
@@ -169,24 +172,13 @@ describe("spring-boot.nvim project gating", function()
     return buf
   end
 
-  --- Every client config the gate hands to vim.lsp.start for a buffer at
-  --- `path`/`ft` — empty when the gate refused to start boot-ls.
-  ---
-  --- vim.lsp.start is the gate's real exit, and stubbing it is what keeps a
-  --- second JVM from being spawned per assertion. Everything up to it runs for
-  --- real: the declares_spring_boot check, the nvim_buf_call, and
-  --- launch.update_ls_config building the actual client config — which is the
-  --- only reason the serialisation test at the end of this file can see
-  --- anything.
+  --- Every root_dir call, with the arguments on_dir was invoked with — empty
+  --- when the gate refused to call on_dir at all.
   local function resolve(path, ft)
     local buf = quiet_buffer(path, ft)
-    local started = {}
-    H.stub(vim.lsp, "start", function(config)
-      table.insert(started, config)
-      return nil -- no client id: nothing downstream may treat this as attached
-    end)
-    gate({ buf = buf })
-    return started
+    local dirs = {}
+    root_dir(buf, function(...) table.insert(dirs, { ... }) end)
+    return dirs
   end
 
   --- resolve(), specialised to the java gate's own fixture layout.
@@ -197,13 +189,13 @@ describe("spring-boot.nvim project gating", function()
   it("starts boot-ls for a Gradle project that declares Spring Boot", function()
     if skip_reason then return H.skip(skip_reason) end
 
-    local started = gate_java(H.fixture("spring-gradle"))
+    local dirs = gate_java(H.fixture("spring-gradle"))
 
-    assert.equals(1, #started)
+    assert.equals(1, #dirs)
     -- The resolved root has to be non-empty: boot-ls builds file:// URIs from
     -- it, and an empty string yields a malformed "file://" that crashes the
     -- server on every document event.
-    local resolved = started[1].root_dir
+    local resolved = dirs[1][1]
     assert.is_true(type(resolved) == "string" and #resolved > 0)
   end)
 
@@ -293,9 +285,10 @@ describe("spring-boot.nvim project gating", function()
   it("does not gate yaml/jproperties on the Spring check", function()
     if skip_reason then return H.skip(skip_reason) end
 
-    -- Deliberate asymmetry: our gate only short-circuits filetype "java".
+    -- Deliberate asymmetry: our wrapper only short-circuits filetype "java",
+    -- delegating straight to the plugin's own root_dir otherwise.
     -- application.yml / application.properties are filename-gated inside
-    -- spring_boot.launch.start itself, and running the build-file
+    -- that (not on declares_spring_boot), and running the build-file
     -- heuristic on them as well would break the standalone-config-file case
     -- boot-ls is best at. Asserted so the asymmetry is a decision, not an
     -- accident. java-plain, i.e. the very project the java gate above refuses
@@ -311,9 +304,8 @@ describe("spring-boot.nvim project gating", function()
       if skip_reason then return H.skip(skip_reason) end
 
       -- bootls_cmd is the same function vim.lsp.config["spring-boot"].cmd calls
-      -- (via require("spring_boot.config")) once a client actually starts;
-      -- calling it directly here gets the same command line without spawning a
-      -- real JVM.
+      -- once a client actually starts; calling it directly here gets the same
+      -- command line without spawning a real JVM.
       local cmd = require("spring_boot.launch").bootls_cmd(require("spring_boot.config"))
       assert.is_truthy(cmd, "bootls_cmd returned nil — boot-ls jar not resolved")
 
@@ -334,13 +326,10 @@ describe("spring-boot.nvim project gating", function()
     it("strips documentSymbolProvider in on_init", function()
       if skip_reason then return H.skip(skip_reason) end
 
-      -- From the config the gate actually starts a client with, not from
-      -- vim.lsp.config["spring-boot"] — this plugin version never populates
-      -- that table, so reading it here is how this assertion used to be
-      -- unreachable.
-      local started = gate_java(H.fixture("spring-gradle"))
-      assert.equals(1, #started)
-      local on_init = started[1].on_init
+      -- Read straight off vim.lsp.config["spring-boot"]: setup()'s `server`
+      -- option is the highest-priority layer of the config merge chain, so
+      -- this is the exact on_init a real client would be started with.
+      local on_init = vim.lsp.config["spring-boot"].on_init
       assert.is_truthy(on_init)
 
       local client = {
@@ -362,36 +351,6 @@ describe("spring-boot.nvim project gating", function()
       -- Everything else must survive: the wrapper still calls the plugin's own
       -- boot_ls_init, and dropping that would break boot-ls's client setup.
       assert.is_true(client.server_capabilities.hoverProvider)
-    end)
-
-    it("is JSON-serialisable, so the initialize request can actually be sent", function()
-      if skip_reason then return H.skip(skip_reason) end
-
-      -- The regression this whole rewrite exists for. Gating by wrapping
-      -- `server.root_dir` in a function is the obvious-looking way to write
-      -- lua/plugins/java.lua's check, and it is silently fatal here:
-      -- launch.update_ls_config only substitutes its own root when root_dir is
-      -- falsy, so the function survives into
-      --   client_config.init_options.workspaceFolders = client_config.root_dir
-      -- and initialize dies in the encoder with
-      --   vim/lsp/rpc.lua: Cannot serialise function: type not supported
-      -- The observable damage was total: a loud stack trace on BufReadPost for
-      -- every .java and application.properties file in a Spring project,
-      -- boot-ls never attaching, and one orphaned JVM leaked per session (the
-      -- process spawns before initialize fails, so nvim never tracks it).
-      local started = gate_java(H.fixture("spring-gradle"))
-      assert.equals(1, #started)
-      local config = started[1]
-
-      -- root_dir reaches the wire as init_options.workspaceFolders, and boot-ls
-      -- builds file:// URIs from it.
-      assert.equals("string", type(config.root_dir))
-      assert.equals("string", type(config.init_options.workspaceFolders))
-
-      -- The whole payload, not just the one field: anything non-encodable
-      -- anywhere in init_options fails the request the same way.
-      local ok, err = pcall(vim.json.encode, config.init_options)
-      assert.is_true(ok, "init_options is not JSON-encodable: " .. tostring(err))
     end)
   end)
 end)

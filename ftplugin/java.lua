@@ -120,6 +120,55 @@ if not lombok_arg then
   vim.notify("jdtls: lombok.jar not found — Lombok-generated members will be invisible", vim.log.levels.WARN)
 end
 
+-- Never run a project-supplied binary for the Gradle import: jdt-ls refuses
+-- to execute a gradle-wrapper.jar it does not already recognize ("Security
+-- Warning! The gradle wrapper '...' could be malicious"), and there is no UI
+-- to answer that prompt from inside Neovim the way VS Code's clickable
+-- notification does — it just repeats, with the import stuck (0% Building /
+-- Validating Gradle wrapper checksum...) until a checksum is added to
+-- java.imports.gradle.wrapper.checksums by hand, and again after every
+-- ./gradlew wrapper bump, in every repo.
+--
+-- Disabling the wrapper outright (java.import.gradle.wrapper.enabled=false)
+-- avoids the prompt, but then also skips the one file that said which
+-- Gradle the project actually needs: pointing `home` at a single fixed
+-- install (e.g. this machine's sdkman "current") silently downgrades every
+-- project pinned to a newer one. That is exactly what broke Lombok here —
+-- this project's own gradle-wrapper.properties pins 9.8.2, sdkman's
+-- `current` was 8.13, and Gradle 8.13 cannot resolve a dependency set built
+-- against 9.x — not a Lombok-specific failure, just the most visible symptom
+-- of one.
+--
+-- So: read the version straight out of the project's own wrapper.properties
+-- (never execute it) and hand Buildship `java.import.gradle.version`, which
+-- makes it fetch/use that exact Gradle through its own Tooling API, still
+-- without ever running the project's wrapper jar. Only a project with no
+-- wrapper.properties at all (no version to read) falls back to a fixed
+-- local install, and only as a last resort.
+local function gradle_wrapper_version(dir)
+  local props = dir .. "/gradle/wrapper/gradle-wrapper.properties"
+  if vim.fn.filereadable(props) == 0 then return nil end
+  for _, line in ipairs(vim.fn.readfile(props)) do
+    local version = line:match("gradle%-([%d%.]+)%-%a+%.zip")
+    if version then return version end
+  end
+  return nil
+end
+
+local gradle_version = gradle_wrapper_version(root_dir)
+
+local gradle_bin = vim.fn.exepath("gradle")
+-- .../candidates/gradle/current/bin/gradle -> .../candidates/gradle/current
+local gradle_home = gradle_bin ~= "" and vim.fn.fnamemodify(gradle_bin, ":h:h") or nil
+if not gradle_version and not gradle_home then
+  vim.notify(
+    "jdtls: no `gradle` on PATH and no gradle-wrapper.properties found —\n"
+      .. "falling back to this project's own wrapper (and its trust prompt).\n"
+      .. "Install one (e.g. `sdk install gradle`) to avoid it.",
+    vim.log.levels.WARN
+  )
+end
+
 -- ── jdtls heap ──────────────────────────────────────────────────────────────
 -- Sized from the machine rather than hardcoded, because jdtls is only one of
 -- several JVMs and language servers this config can have running at once: the
@@ -214,6 +263,15 @@ local config = {
           -- otherwise inherits jdtls's own JVM, which is fine, but being
           -- explicit keeps the daemon off a stray old PATH java.
           java = { home = launcher_jdk.path },
+          -- See gradle_wrapper_version/gradle_home above: skip each
+          -- project's own wrapper jar (and its "could be malicious" trust
+          -- prompt). `version`/`home` are only consulted when
+          -- `wrapper.enabled` is false; both are left unset when neither
+          -- was resolvable, so that case falls back to the normal wrapper
+          -- behavior (and its prompt) rather than a broken Gradle setup.
+          wrapper = { enabled = (gradle_version or gradle_home) ~= nil and false or nil },
+          version = gradle_version,
+          home = gradle_version == nil and gradle_home or nil,
           -- THE fix for "jdtls attaches but returns zero completions" in any
           -- Gradle project that declares a toolchain, e.g.
           --   java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }
@@ -640,15 +698,33 @@ vim.api.nvim_buf_create_user_command(0, "JdtlsClean", function()
   -- force-stopped every Java project in the session, so cleaning one project
   -- cost a full re-import of all the others — and since only the current buffer
   -- is re-sourced above, those others stayed server-less until you touched them.
+  --
+  -- spring-boot is included alongside jdtls: a long session was observed with
+  -- TWO live boot-ls JVMs for this one project — one from early in the day,
+  -- one from hours later — after repeated :JdtlsClean cycles. boot-ls's own
+  -- root_dir() (spring_boot/launch.lua) is a pure function of the buffer path,
+  -- so it always resolves the same root here; the duplicate was nvim believing
+  -- the earlier client was gone (so vim.lsp.enable's auto-start reuse check
+  -- found nothing to reuse and started a fresh one) while that client's JVM
+  -- process never actually exited — plausibly a shutdown/exit notification a
+  -- GC-paused JVM never got around to acting on. :JdtlsClean already force-stops
+  -- (not the polite shutdown/exit handshake) rather than trust that handshake
+  -- for jdtls; doing the same for spring-boot here closes that gap for it too,
+  -- regardless of what left the earlier one stranded. Harmless if there is
+  -- nothing to stop: the first early-return below still fires when neither
+  -- name has a client for this root_dir.
   local clients = vim.tbl_filter(function(c)
     return c.config and c.config.root_dir == root_dir
   end, vim.lsp.get_clients({ name = "jdtls" }))
+  vim.list_extend(clients, vim.tbl_filter(function(c)
+    return c.config and c.config.root_dir == root_dir
+  end, vim.lsp.get_clients({ name = "spring-boot" })))
   if #clients == 0 then
     wipe_and_restart()
     return
   end
 
-  vim.notify("jdtls: stopping server…", vim.log.levels.INFO)
+  vim.notify("jdtls: stopping server(s)…", vim.log.levels.INFO)
   local pending = {}
   for _, c in ipairs(clients) do pending[c.id] = true end
 
@@ -677,7 +753,10 @@ vim.api.nvim_buf_create_user_command(0, "JdtlsClean", function()
   -- client:stop(true), not vim.lsp.stop_client(clients, true): the latter is
   -- deprecated since 0.11 and removed in 0.13. get_clients already handed us
   -- client objects, so this is the same force-stop one client at a time.
+  -- force=true matters here specifically: it skips the polite shutdown/exit
+  -- RPC round trip (the thing a GC-paused JVM can fail to act on) and tears
+  -- down the client's underlying process directly.
   for _, c in ipairs(clients) do c:stop(true) end
-end, { desc = "Clear jdtls workspace and restart" })
+end, { desc = "Clear jdtls workspace and restart (also force-stops this project's spring-boot client)" })
 
 vim.keymap.set("n", "<leader>jc", "<cmd>JdtlsClean<CR>", { buffer = true, desc = "Java: Clean & restart jdtls" })
