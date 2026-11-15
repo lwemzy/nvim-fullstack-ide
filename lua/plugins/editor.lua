@@ -266,6 +266,38 @@ return {
     },
   },
 
+  -- Merge conflict resolver — the one thing gitsigns/diffview/neogit above
+  -- don't give this config at all: there is no `git mergetool` wired up and
+  -- diffview is only configured for diff/history review, not conflict
+  -- resolution. diffbandit's three-pane local/result/remote view fills that
+  -- gap; its two-way diff/git-review/commit-panel features overlap what's
+  -- already above, so only the merge resolver and the git-scoped diff review
+  -- get keymaps — everything else stays reachable by :DiffBandit* command
+  -- name only, same as :DiffviewFileHistory before it got a key.
+  --
+  -- No tagged release exists yet (main branch only, ~80 commits) — pin to a
+  -- commit with `commit = "<sha>"` below if main breaking underneath you
+  -- becomes a problem; left untracked for now to get upstream fixes.
+  {
+    "CoreyKaylor/diffbandit.nvim",
+    cmd = {
+      "DiffBandit", "DiffBanditBuffers", "DiffBanditFolderDiff",
+      "DiffBanditGit", "DiffBanditGitCurrent", "DiffBanditCommitPanel",
+      "DiffBanditGitMenu", "DiffBanditGitLog", "DiffBanditGitCommit",
+      "DiffBanditGitCompare", "DiffBanditGitCheckout", "DiffBanditMerge",
+    },
+    -- <leader>gm / <leader>gD rather than lowercase gd/gg/gv/gh/etc: those are
+    -- all already gitsigns/diffview/neogit above. Capital D pairs with the
+    -- gitsigns capital-S/R convention ("whole" operation vs. gs/gr's "hunk").
+    keys = {
+      { "<leader>gm", "<cmd>DiffBanditMerge %<CR>", desc = "Git: Resolve merge conflicts (current file)" },
+      { "<leader>gD", "<cmd>DiffBanditGit<CR>",     desc = "Git: DiffBandit review" },
+    },
+    config = function()
+      require("diffbandit").setup()
+    end,
+  },
+
   -- Formatter
   {
     "stevearc/conform.nvim",
@@ -344,6 +376,27 @@ return {
         return { "oxfmt_house", stop_after_first = true }
       end
 
+      -- Most Spring Boot *applications* just get jdtls's own Google-style
+      -- formatter on save (ftplugin/java.lua) — lsp_format = "fallback" below
+      -- covers that for java the same as for any filetype with no entry here.
+      -- The actual Spring Framework/Boot repos (and a project that opts into
+      -- their convention) build with the io.spring.javaformat Gradle plugin
+      -- instead, which jdtls cannot run at all: it is not an Eclipse formatter
+      -- profile but its own shaded-Eclipse engine plus Spring-specific AST
+      -- passes (Javadoc line breaks, JSpecify annotations, …), reachable only
+      -- through its own Gradle task. A project that applies it also fails
+      -- `./gradlew check` on any drift from that task's output, so formatting
+      -- to Google style on save is actively wrong there — every save would
+      -- disagree with what CI enforces. Route those through the real
+      -- formatter instead; everything else returns {} and falls through to
+      -- the lsp_format fallback below, same as before this existed.
+      local function java_formatters(bufnr)
+        if project.declares_spring_javaformat(bufnr) then
+          return { "spring_javaformat" }
+        end
+        return {}
+      end
+
       require("conform").setup({
         formatters_by_ft = {
           javascript      = jsts_formatters,
@@ -358,12 +411,16 @@ return {
           html            = { "prettierd", "prettier", stop_after_first = true },
           yaml            = { "prettierd", "prettier", stop_after_first = true },
           markdown        = { "prettierd", "prettier", stop_after_first = true },
+          java            = java_formatters,
         },
         -- format_after_save runs async so it never blocks editing
         --
         -- lsp_format = "fallback" is what formats the filetypes with no entry
-        -- above — Java (jdtls, via the java-google-style.xml profile in
-        -- ftplugin/java.lua), XML, Lua. It is spelled the current way, not the
+        -- above, and java_formatters returns {} (no entry, in effect) for
+        -- any Java buffer that isn't a spring_javaformat project — which is
+        -- most of them, so this is still what formats Java (jdtls, via the
+        -- java-google-style.xml profile in ftplugin/java.lua) in the common
+        -- case, plus XML and Lua always. It is spelled the current way, not the
         -- old `lsp_fallback = true`: conform still translates that key for
         -- backwards compatibility but no longer documents it, and a release
         -- dropping it would silently leave those filetypes unformatted on save
@@ -465,6 +522,43 @@ return {
             house.cwd = nil
             return house
           end)(),
+
+          -- Real spring-javaformat, via its own Gradle task — see
+          -- java_formatters above for why jdtls can't run this one directly.
+          --
+          -- stdin = false: the task rewrites the file ON DISK, not stdout,
+          -- and this only ever runs from format_after_save (BufWritePost) —
+          -- by then the buffer's content already IS the on-disk content, so
+          -- there is nothing to pipe in. conform reads the file back after,
+          -- the same way it would read a formatter's stdout.
+          --
+          -- formatMain/formatTest — confirmed with `./gradlew tasks --all`
+          -- against a real project using this plugin, not guessed — have no
+          -- task dependencies (no compileJava), so a buffer with a transient
+          -- compile error mid-edit still formats. They reformat the WHOLE
+          -- source set, not just this file: the plugin's Format task extends
+          -- Gradle's SourceTask, which has no per-invocation file filter from
+          -- the CLI. Measured against a real project: ~1-2s with a warm
+          -- Gradle daemon, and idempotent — an already-formatted tree is left
+          -- untouched, so this never produces a stray diff in unrelated files.
+          --
+          -- cwd has to be the directory holding `gradlew`, not just the
+          -- nearest build file: this plugin is normally applied from a
+          -- multi-module build's root, but only the root carries the wrapper
+          -- script, and `./gradlew` fails outright run from anywhere else.
+          spring_javaformat = {
+            command = "./gradlew",
+            stdin = false,
+            require_cwd = true,
+            cwd = function(_, ctx)
+              local gradlew = project.find_upward(ctx.buf, "gradlew")[1]
+              return gradlew and vim.fs.dirname(gradlew) or nil
+            end,
+            args = function(_, ctx)
+              local task = ctx.filename:find("/src/test/java/", 1, true) and "formatTest" or "formatMain"
+              return { task, "--console=plain", "-q" }
+            end,
+          },
         },
       })
     end,

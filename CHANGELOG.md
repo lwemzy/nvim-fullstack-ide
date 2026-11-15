@@ -5,6 +5,27 @@ full git history on 2026-10-09, then maintained going forward — see
 CLAUDE.md: every commit that changes behavior gets an entry here in the
 same commit.
 
+## 2026-11-15
+
+- **Add diffbandit.nvim merge-conflict resolver, and a Spring javaformat-aware Java formatter** (`9528c9f`)
+  - diffbandit.nvim fills a real gap in the git stack (gitsigns/diffview/neogit):
+    none of them wire up a merge-conflict UI, so there was no `git mergetool`
+    equivalent at all. Only its merge resolver and git-scoped diff review get
+    keymaps (`<leader>gm`, `<leader>gD`) — everything else overlaps gitsigns/
+    diffview/neogit and stays reachable by `:DiffBandit*` command name only. No
+    tagged release exists yet (installed off `main`).
+  - Most Spring Boot *applications* are fine with jdtls's own Google-style
+    formatter on save. The actual Spring Framework/Boot repos (and any project
+    that opts into their convention) build with the `io.spring.javaformat`
+    Gradle plugin instead, which jdtls cannot run — it's a separate
+    shaded-Eclipse engine with Spring-specific AST passes, reachable only
+    through its own Gradle task, and formatting to Google style on every save
+    in such a project actively disagreed with what `./gradlew check` enforces.
+    `lua/config/project.lua`'s new `declares_spring_javaformat` detects it;
+    `lua/plugins/editor.lua`'s new `spring_javaformat` conform formatter runs
+    `./gradlew formatMain`/`formatTest` for those projects only, everything
+    else still falls through to the lsp_format fallback as before.
+
 ## 2026-10-28
 
 - **Update 4 pinned plugins: neogit, nvim-lspconfig, nvim-tree.lua, schemastore.nvim** (`1df444d`)

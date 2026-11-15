@@ -173,14 +173,59 @@ describe("conform formatter selection", function()
     end)
   end)
 
+  describe("java_formatters", function()
+    --- What the config would run for a java buffer in `fixture`.
+    local function java_selection_in(fixture)
+      local dir = H.fixture(fixture)
+      return conform.formatters_by_ft.java(named_buffer(dir .. "/src/main/java/com/example/App.java")), dir
+    end
+
+    it("returns {} for plain Java, deferring to the lsp_format fallback", function()
+      assert.same({}, (java_selection_in("java-plain")))
+    end)
+
+    it("returns {} for an ordinary Spring Boot project that doesn't apply io.spring.javaformat", function()
+      -- The common case: most Spring Boot *applications* never pull this
+      -- plugin in, and jdtls's own Google-style formatter (the lsp_format
+      -- fallback) is the right answer for them, same as plain Java.
+      assert.same({}, (java_selection_in("spring-gradle")))
+    end)
+
+    it("routes to spring_javaformat for a project that applies io.spring.javaformat", function()
+      -- The one shape jdtls cannot format on its own: see the formatter's own
+      -- comment in lua/plugins/editor.lua for why.
+      local dir = H.fixture("spring-gradle")
+      H.write(dir .. "/build.gradle", {
+        "plugins {",
+        "\tid 'java'",
+        "\tid 'org.springframework.boot' version '3.3.4'",
+        "\tid 'io.spring.dependency-management' version '1.1.6'",
+        "\tid 'io.spring.javaformat' version '0.0.48'",
+        "}",
+      })
+      local got = conform.formatters_by_ft.java(named_buffer(dir .. "/src/main/java/com/example/demo/DemoApplication.java"))
+      assert.same({ "spring_javaformat" }, got)
+    end)
+  end)
+
   describe("formatters_by_ft", function()
     it("maps every configured filetype to a non-empty formatter list", function()
       -- An empty list is not a no-op: conform reports "Formatters unavailable"
       -- for the filetype and the entry is a lie about what will run on save.
+      --
+      -- java is deliberately excluded: unlike every other entry here, {} is
+      -- the CORRECT answer for the common case (an ordinary Spring Boot app,
+      -- or plain Java) — java_formatters only returns something non-empty for
+      -- the one project shape (io.spring.javaformat applied) that jdtls's own
+      -- formatter cannot serve, and lsp_format="fallback" below is what makes
+      -- {} a real answer and not a lie for this one filetype. See its own
+      -- describe block.
       local configured = H.fixture("prettier-configured")
       local unconfigured = H.fixture("prettier-none")
       for ft, entry in pairs(conform.formatters_by_ft) do
-        if type(entry) == "function" then
+        if ft == "java" then
+          -- skip: see comment above
+        elseif type(entry) == "function" then
           -- Exercised in BOTH project shapes: a function that returned {} down
           -- one branch would otherwise pass on the other.
           for _, dir in ipairs({ configured, unconfigured }) do

@@ -175,4 +175,27 @@ function M.declares_spring_boot(source)
   return false
 end
 
+--- Does any build file above `source` apply the `io.spring.javaformat` Gradle
+--- plugin?
+---
+--- Deliberately its own check rather than folded into declares_spring_boot:
+--- this is an opt-in convention (the one the actual Spring Framework/Boot
+--- repos build with) that most Spring Boot *applications* do not pull in, and
+--- it changes jdtls's own java.formatter.settings.url/profile preference,
+--- which plain Google style would otherwise answer — io.spring.javaformat is
+--- not an Eclipse formatter profile at all (it is a separate, shaded-Eclipse
+--- formatter engine with its own AST passes, invoked only through its own
+--- Gradle/Maven plugin), so a project using it needs Format on save
+--- routed through Gradle (see the spring_javaformat conform formatter in
+--- lua/plugins/editor.lua) instead of jdtls's LSP formatting.
+function M.declares_spring_javaformat(source)
+  for _, file in ipairs(M.java_build_files(source)) do
+    local ok, lines = pcall(vim.fn.readfile, file)
+    if ok and table.concat(lines, "\n"):find("io%.spring%.javaformat") then
+      return true
+    end
+  end
+  return false
+end
+
 return M
